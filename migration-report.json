@@ -1,0 +1,275 @@
+{
+  "timestamp": "2026-05-25T15:43:13.591Z",
+  "total": 28,
+  "completed": 14,
+  "failed": 14,
+  "skipped": 0,
+  "details": [
+    {
+      "id": "69ae9f41139c16a2db3635c5",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69aec2fe3a35deb34d3886e5",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b0355def309e127dababe0",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773155826/getameal/profile/dpjtrwysptejfccxpqy1.png',\n  publicId: 'getameal/profile/dpjtrwysptejfccxpqy1'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b03709ef309e127dababf8",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773156052/getameal/profile/rrjncni3tdgs7d36ygcx.png',\n  publicId: 'getameal/profile/rrjncni3tdgs7d36ygcx'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b040c4ef309e127dabac48",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773158551/getameal/profile/hwxv0lozdpxgfihhhhit.png',\n  publicId: 'getameal/profile/hwxv0lozdpxgfihhhhit'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b04401ef309e127dabac70",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773159478/getameal/profile/lxygv25qy1zpwgp48rc0.png',\n  publicId: 'getameal/profile/lxygv25qy1zpwgp48rc0'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b048c5ef309e127dabaca2",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773160596/getameal/profile/srwflug5myocqgagoxry.png',\n  publicId: 'getameal/profile/srwflug5myocqgagoxry'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b05386ef309e127dabacd0",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773163421/getameal/profile/zolxcoenauovi9fuo4gi.png',\n  publicId: 'getameal/profile/zolxcoenauovi9fuo4gi'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b05b47ef309e127dabacfe",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773165345/getameal/profile/se59ikufizplepc9fdbv.png',\n  publicId: 'getameal/profile/se59ikufizplepc9fdbv'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b05faeef309e127dabad25",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773166433/getameal/profile/azuv46jkzhqpwjgwdjgd.png',\n  publicId: 'getameal/profile/azuv46jkzhqpwjgwdjgd'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b0654660abc0358057b4cf",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773167985/getameal/profile/diims7rcrk4ulwhqr4ss.png',\n  publicId: 'getameal/profile/diims7rcrk4ulwhqr4ss'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b06a6860abc0358057b500",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773169293/getameal/profile/om0ufyxepvrxpbpricsm.png',\n  publicId: 'getameal/profile/om0ufyxepvrxpbpricsm'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b06ef960abc0358057b52c",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1773170485/getameal/profile/kfjvtxp8s9gkymgd6vuu.png',\n  publicId: 'getameal/profile/kfjvtxp8s9gkymgd6vuu'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b1b8ab3c9a5bd65c4f546d",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b29c748a9ddc9d288b11d8",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b2db6fbdc7f7f039fb8086",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b2dccb9b72601555cbbb01",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b2de224efecc965ad1d077",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b2dfe50ba37aba9b140dca",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69b4054ac4a871154c43d241",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1778613676/getameal/profile/q1zm8tdqeatdqt7nbzem.jpg',\n  publicId: 'getameal/profile/q1zm8tdqeatdqt7nbzem'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69b44899bcf578fcd7df29c9",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails"
+      ]
+    },
+    {
+      "id": "69bbef14330e732645d38849",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1775833772/getameal/profile/qha5mqhykfpwzrt2jenn.jpg',\n  publicId: 'getameal/profile/qha5mqhykfpwzrt2jenn'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69d6ad1c6e1e5fb9211672ea",
+      "status": "failed",
+      "error": "Cast to string failed for value \"{\n  url: 'https://res.cloudinary.com/dhfiplpxv/image/upload/v1775764758/getameal/profile/nwxupqbm8lrhitur993w.jpg',\n  publicId: 'getameal/profile/nwxupqbm8lrhitur993w'\n}\" (type Object) at path \"profilePhoto\""
+    },
+    {
+      "id": "69d7b2e26f0c031095b8adc4",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "email",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails"
+      ]
+    },
+    {
+      "id": "69d7b3759dbf81ddf143d06a",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "email",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails"
+      ]
+    },
+    {
+      "id": "69d86ecef75a6780a64de3c0",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "email",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails",
+        "location"
+      ]
+    },
+    {
+      "id": "69fe585c27898e9f93ead67b",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "email",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails"
+      ]
+    },
+    {
+      "id": "6a00d995eb18107d5a2ab934",
+      "status": "completed",
+      "updatesApplied": [
+        "firstName",
+        "lastName",
+        "email",
+        "bio",
+        "profilePhoto",
+        "coverPhoto",
+        "kitchenPhotos",
+        "bankDetails"
+      ]
+    }
+  ]
+}
