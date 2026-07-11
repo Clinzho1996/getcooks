@@ -1,4 +1,5 @@
-// models/Order.js - Updated for cook-centric orders
+// models/Order.js - Add out_for_delivery to enum
+
 import mongoose from "mongoose";
 
 const orderSchema = new mongoose.Schema(
@@ -10,13 +11,11 @@ const orderSchema = new mongoose.Schema(
 		},
 		customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer" },
 
-		// Customer Info (for non-registered customers)
 		customerName: { type: String, required: true },
 		customerPhone: { type: String, required: true },
 		customerEmail: { type: String },
 		customerNote: { type: String },
 
-		// Order Details
 		orderType: {
 			type: String,
 			enum: ["product_order", "custom_order"],
@@ -38,11 +37,9 @@ const orderSchema = new mongoose.Schema(
 			},
 		],
 
-		// Custom Order Details
 		customOrderTitle: { type: String },
 		customOrderDescription: { type: String },
 
-		// Fulfillment
 		deliveryType: {
 			type: String,
 			enum: ["pickup", "delivery"],
@@ -54,16 +51,13 @@ const orderSchema = new mongoose.Schema(
 			to: String,
 		},
 
-		// Timing
 		readyDate: { type: Date, required: true },
 		readyTime: { type: String },
 
-		// Financials
 		subtotal: { type: Number, required: true },
 		serviceFee: { type: Number, required: true },
 		totalAmount: { type: Number, required: true },
 
-		// Payment
 		paymentMethod: {
 			type: String,
 			enum: ["paystack", "bank_transfer", "cash", "wallet"],
@@ -77,7 +71,7 @@ const orderSchema = new mongoose.Schema(
 		paymentReference: String,
 		paymentLink: String,
 
-		// Status
+		// ✅ Status - Make sure out_for_delivery is in the enum
 		status: {
 			type: String,
 			enum: [
@@ -85,6 +79,7 @@ const orderSchema = new mongoose.Schema(
 				"confirmed",
 				"preparing",
 				"ready",
+				"out_for_delivery", // ✅ This must be here
 				"picked_up",
 				"delivered",
 				"cancelled",
@@ -92,7 +87,6 @@ const orderSchema = new mongoose.Schema(
 			default: "pending",
 		},
 
-		// Notes
 		sellerNote: { type: String },
 		customerNote: { type: String },
 	},

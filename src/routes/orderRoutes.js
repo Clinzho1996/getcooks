@@ -20,8 +20,10 @@ const router = express.Router();
 // ===== PUBLIC ROUTES (No Auth) =====
 router.post("/customer", createCustomerOrder);
 router.get("/customer/:orderId", getCustomerOrderDetails);
-router.post("/payment/callback", handlePaymentCallback);
-router.get("/payment/redirect", paymentRedirect);
+
+// ✅ Payment routes - Public (No Auth)
+router.post("/payment/callback", handlePaymentCallback); // Changed to POST for Paystack webhook
+router.get("/payment/redirect", paymentRedirect); // For redirect after payment
 
 // ===== AUTHENTICATED ROUTES =====
 router.use(protect);

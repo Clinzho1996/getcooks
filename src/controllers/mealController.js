@@ -885,7 +885,6 @@ export const adminCreateMeal = [
 	},
 ];
 
-// Create product
 export const createProduct = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -928,23 +927,64 @@ export const createProduct = async (req, res) => {
 			}
 		}
 
-		// Calculate customer price (price + paystack fee + 5% platform fee)
-		const platformFee = price * 0.05;
-		const paystackFee = (price + platformFee) * 0.015 + 100; // Paystack fee in kobo, converted to naira
-		const customerPrice = price + platformFee + paystackFee;
+		// ✅ FIX: Parse price to number first
+		const parsedPrice = parseFloat(price);
+		if (isNaN(parsedPrice) || parsedPrice <= 0) {
+			return res.status(400).json({
+				message: "Price must be a valid positive number",
+			});
+		}
+
+		// Calculate customer price correctly
+		const platformFee = parsedPrice * 0.05;
+		const subtotal = parsedPrice + platformFee;
+		const paystackFee = subtotal * 0.015 + 1; // 1 naira (100 kobo)
+		const customerPrice = parseFloat((subtotal + paystackFee).toFixed(2));
 
 		// Parse add-ons
 		let parsedAddOns = [];
 		if (addOns) {
 			try {
-				parsedAddOns = typeof addOns === "string" ? JSON.parse(addOns) : addOns;
-			} catch (e) {
-				// If parsing fails, try to parse as array of objects
-				if (Array.isArray(addOns)) {
+				if (typeof addOns === "string") {
+					parsedAddOns = JSON.parse(addOns);
+				} else if (Array.isArray(addOns)) {
 					parsedAddOns = addOns;
+				} else if (typeof addOns === "object") {
+					parsedAddOns = [addOns];
+				}
+			} catch (e) {
+				// Try cleaning string with single quotes
+				try {
+					const cleaned = addOns.replace(/'/g, '"');
+					parsedAddOns = JSON.parse(cleaned);
+				} catch (e2) {
+					console.error("Failed to parse addOns:", e2);
+					return res.status(400).json({
+						message:
+							"Invalid addOns format. Expected array of objects with name and price.",
+						received: addOns,
+					});
 				}
 			}
 		}
+
+		// Validate addOns structure
+		if (parsedAddOns && parsedAddOns.length > 0) {
+			for (const item of parsedAddOns) {
+				if (!item.name || typeof item.price !== "number") {
+					return res.status(400).json({
+						message: "Each add-on must have a name (string) and price (number)",
+						invalidItem: item,
+					});
+				}
+			}
+		}
+
+		// Parse isAlwaysAvailable
+		const isAlwaysAvailableBool =
+			isAlwaysAvailable === "true" ||
+			isAlwaysAvailable === true ||
+			isAlwaysAvailable === "1";
 
 		const product = await Meal.create({
 			cookId: userId,
@@ -952,12 +992,12 @@ export const createProduct = async (req, res) => {
 			category,
 			whatsIncluded,
 			unitType,
-			price,
+			price: parsedPrice,
 			customerPrice,
 			addOns: parsedAddOns,
 			images,
 			isAvailable: true,
-			isAlwaysAvailable: isAlwaysAvailable || false,
+			isAlwaysAvailable: isAlwaysAvailableBool,
 			status: "active",
 		});
 
@@ -1008,6 +1048,8 @@ export const getCookProducts = async (req, res) => {
 };
 
 // Update product
+// controllers/mealController.js - Fixed updateProduct
+
 export const updateProduct = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -1041,21 +1083,53 @@ export const updateProduct = async (req, res) => {
 
 		// If price changes, recalculate customer price
 		if (updates.price) {
-			const platformFee = updates.price * 0.05;
-			const paystackFee = (updates.price + platformFee) * 0.015 + 100;
-			updates.customerPrice = updates.price + platformFee + paystackFee;
+			// ✅ FIX: Parse price to number
+			const parsedPrice = parseFloat(updates.price);
+			if (isNaN(parsedPrice) || parsedPrice <= 0) {
+				return res.status(400).json({
+					message: "Price must be a valid positive number",
+				});
+			}
+
+			const platformFee = parsedPrice * 0.05;
+			const subtotal = parsedPrice + platformFee;
+			const paystackFee = subtotal * 0.015 + 1;
+			updates.customerPrice = parseFloat((subtotal + paystackFee).toFixed(2));
+			updates.price = parsedPrice;
 		}
 
 		// Parse add-ons if provided
 		if (updates.addOns) {
 			try {
-				updates.addOns =
-					typeof updates.addOns === "string"
-						? JSON.parse(updates.addOns)
-						: updates.addOns;
+				if (typeof updates.addOns === "string") {
+					updates.addOns = JSON.parse(updates.addOns);
+				}
 			} catch (e) {
-				// Keep as is
+				try {
+					const cleaned = updates.addOns.replace(/'/g, '"');
+					updates.addOns = JSON.parse(cleaned);
+				} catch (e2) {
+					return res.status(400).json({
+						message: "Invalid addOns format. Expected array of objects.",
+					});
+				}
 			}
+		}
+
+		// Handle isAlwaysAvailable boolean
+		if (updates.isAlwaysAvailable !== undefined) {
+			updates.isAlwaysAvailable =
+				updates.isAlwaysAvailable === "true" ||
+				updates.isAlwaysAvailable === true ||
+				updates.isAlwaysAvailable === "1";
+		}
+
+		// Handle isAvailable boolean
+		if (updates.isAvailable !== undefined) {
+			updates.isAvailable =
+				updates.isAvailable === "true" ||
+				updates.isAvailable === true ||
+				updates.isAvailable === "1";
 		}
 
 		const updatedProduct = await Meal.findByIdAndUpdate(productId, updates, {

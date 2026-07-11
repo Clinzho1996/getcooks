@@ -47,7 +47,7 @@ app.use("/api/locations", locationRoutes);
 app.use("/api/webhooks", webhookRoutes);
 app.use("/api/payouts", payoutRoutes);
 app.use("/api/cart", cartRoutes);
-app.use("/api/customer", customerRoutes);
+app.use("/api/customers", customerRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/notifications", notificationRoutes);
 

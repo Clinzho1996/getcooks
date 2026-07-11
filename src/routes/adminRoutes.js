@@ -61,7 +61,6 @@ import {
 } from "../controllers/notificationController.js";
 import adminOnly from "../middleware/admin.js";
 import protect from "../middleware/auth.js";
-import { seedMealReviews } from "../scripts/seedMeals.js";
 
 const upload = multer({ dest: "uploads/" });
 const router = express.Router();
@@ -78,7 +77,6 @@ router.get("/orders/at-risk", protect, adminOnly, getAtRiskOrders);
 router.get("/customers", protect, adminOnly, protect, getCustomers);
 // Cook stats
 router.get("/cooks/stats", protect, adminOnly, getCookStats);
-router.post("/seed/reviews", protect, adminOnly, seedMealReviews);
 
 // Fetch all cooks with filters
 router.get("/cooks", protect, adminOnly, getAllCooks);

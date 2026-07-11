@@ -16,18 +16,18 @@ import {
 	updateOrderStatus,
 } from "../controllers/cookController.js";
 import {
-	acceptOrderRequest,
-	createCustomOrder,
-	declineOrderRequest,
-	getOrderRequests,
-} from "../controllers/orderController.js";
-import {
 	createProduct,
 	deleteProduct,
 	getCookProducts,
 	toggleProductAvailability,
 	updateProduct,
 } from "../controllers/mealController.js";
+import {
+	acceptOrderRequest,
+	createCustomOrder,
+	declineOrderRequest,
+	getOrderRequests,
+} from "../controllers/orderController.js";
 import protect from "../middleware/auth.js";
 
 const router = express.Router();
