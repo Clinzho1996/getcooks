@@ -1,5 +1,6 @@
-// routes/authRoutes.js
+// routes/authRoutes.js - Updated with upload middleware
 import express from "express";
+import multer from "multer";
 import {
 	adminLogin,
 	adminRequestPasswordReset,
@@ -17,6 +18,7 @@ import {
 import protect from "../middleware/auth.js";
 
 const router = express.Router();
+const upload = multer({ dest: "uploads/" });
 
 // ===== ADMIN ROUTES =====
 router.post("/admin/create", createAdmin);
@@ -28,7 +30,14 @@ router.post("/admin/reset-password", adminResetPassword);
 // Email/OTP Signup
 router.post("/signup/init", signupInit);
 router.post("/signup/verify", signupVerify);
-router.post("/signup/complete", signupComplete);
+router.post(
+	"/signup/complete",
+	upload.fields([
+		{ name: "profileImage", maxCount: 1 },
+		{ name: "coverImage", maxCount: 1 },
+	]),
+	signupComplete,
+);
 
 // Email/OTP Login
 router.post("/login/init", loginInit);

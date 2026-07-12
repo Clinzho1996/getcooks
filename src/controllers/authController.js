@@ -1,6 +1,9 @@
 // controllers/authController.js - Complete with Social Auth
 
 import bcrypt from "bcryptjs";
+import cloudinary from "cloudinary";
+import dotenv from "dotenv";
+import fs from "fs";
 import { verifyFirebaseToken } from "../config/firebase.js";
 import CookProfile from "../models/CookProfile.js";
 import OTP from "../models/OTP.js";
@@ -8,6 +11,15 @@ import User from "../models/User.js";
 import { sendOTPEmail } from "../utils/emailService.js";
 import { generateOTP } from "../utils/generateOtp.js";
 import { generateToken } from "../utils/jwt.js";
+
+dotenv.config();
+
+// Configure Cloudinary
+cloudinary.v2.config({
+	cloud_name: process.env.CLOUD_NAME,
+	api_key: process.env.CLOUD_KEY,
+	api_secret: process.env.CLOUD_SECRET,
+});
 
 // ===== ADMIN FUNCTIONS =====
 export const createAdmin = async (req, res) => {
@@ -259,6 +271,8 @@ export const signupVerify = async (req, res) => {
 };
 
 // STEP 3: Complete Signup - Cook Onboarding
+// controllers/authController.js - Updated signupComplete with image upload
+
 export const signupComplete = async (req, res) => {
 	try {
 		const {
@@ -274,8 +288,6 @@ export const signupComplete = async (req, res) => {
 			deliveryEnabled,
 			deliveryFee,
 			preparationDays,
-			profileImage,
-			coverImage,
 			termsAccepted,
 		} = req.body;
 
@@ -348,6 +360,46 @@ export const signupComplete = async (req, res) => {
 			});
 		}
 
+		// Handle image uploads
+		let profileImageUrl = null;
+		let coverImageUrl = null;
+
+		// Upload profile image if provided
+		if (req.files && req.files.profileImage) {
+			try {
+				const result = await cloudinary.v2.uploader.upload(
+					req.files.profileImage[0].path,
+					{
+						folder: "getameal/cooks/profiles",
+						transformation: [{ width: 500, height: 500, crop: "fill" }],
+					},
+				);
+				profileImageUrl = result.secure_url;
+				fs.unlinkSync(req.files.profileImage[0].path);
+			} catch (uploadError) {
+				console.error("Profile image upload error:", uploadError);
+				// Continue without image
+			}
+		}
+
+		// Upload cover image if provided
+		if (req.files && req.files.coverImage) {
+			try {
+				const result = await cloudinary.v2.uploader.upload(
+					req.files.coverImage[0].path,
+					{
+						folder: "getameal/cooks/covers",
+						transformation: [{ width: 1200, height: 400, crop: "fill" }],
+					},
+				);
+				coverImageUrl = result.secure_url;
+				fs.unlinkSync(req.files.coverImage[0].path);
+			} catch (uploadError) {
+				console.error("Cover image upload error:", uploadError);
+				// Continue without image
+			}
+		}
+
 		// Create or update user
 		if (!user) {
 			user = await User.create({
@@ -359,18 +411,21 @@ export const signupComplete = async (req, res) => {
 				status: "active",
 				isCook: true,
 				role: "cook",
+				profileImage: profileImageUrl,
+				coverImage: coverImageUrl,
 			});
 		} else {
-			// Update existing user to become a cook
 			user.fullName = storeName;
 			user.phone = phone;
 			user.isCook = true;
 			user.role = "cook";
 			user.isVerified = true;
+			if (profileImageUrl) user.profileImage = profileImageUrl;
+			if (coverImageUrl) user.coverImage = coverImageUrl;
 			await user.save();
 		}
 
-		// Create cook profile with all onboarding data
+		// Create cook profile
 		const cookProfile = await CookProfile.create({
 			userId: user._id,
 			storeName,
@@ -388,11 +443,11 @@ export const signupComplete = async (req, res) => {
 			deliveryEnabled: deliveryEnabled || false,
 			deliveryFee: deliveryEnabled ? deliveryFee || 0 : 0,
 			preparationDays: preparationDays || 1,
-			profileImage: profileImage || null,
-			coverImage: coverImage || null,
+			profileImage: profileImageUrl,
+			coverImage: coverImageUrl,
 			termsAccepted: true,
 			termsAcceptedAt: new Date(),
-			isApproved: false, // Admin approval required
+			isApproved: false,
 			isAvailable: true,
 			walletBalance: 0,
 			storeLink: `https://getameal.com/store/${normalizedHandle}`,
@@ -403,25 +458,22 @@ export const signupComplete = async (req, res) => {
 
 		const token = generateToken(user._id);
 
-		// Remove sensitive data
-		const userData = {
-			_id: user._id,
-			email: user.email,
-			fullName: user.fullName,
-			phone: user.phone,
-			role: user.role,
-			isCook: user.isCook,
-			status: user.status,
-			isVerified: user.isVerified,
-			profileImage: user.profileImage,
-			coverImage: user.coverImage,
-		};
-
 		res.status(201).json({
 			success: true,
 			message: "Store created successfully! Awaiting admin approval.",
 			token,
-			user: userData,
+			user: {
+				_id: user._id,
+				email: user.email,
+				fullName: user.fullName,
+				phone: user.phone,
+				role: user.role,
+				isCook: user.isCook,
+				status: user.status,
+				isVerified: user.isVerified,
+				profileImage: user.profileImage,
+				coverImage: user.coverImage,
+			},
 			cookProfile: {
 				id: cookProfile._id,
 				storeName: cookProfile.storeName,
@@ -433,10 +485,21 @@ export const signupComplete = async (req, res) => {
 				deliveryEnabled: cookProfile.deliveryEnabled,
 				deliveryFee: cookProfile.deliveryFee,
 				preparationDays: cookProfile.preparationDays,
+				profileImage: cookProfile.profileImage,
+				coverImage: cookProfile.coverImage,
 			},
 		});
 	} catch (error) {
 		console.error("Signup complete error:", error);
+		// Clean up any uploaded files if error occurs
+		if (req.files) {
+			if (req.files.profileImage) {
+				fs.unlinkSync(req.files.profileImage[0].path);
+			}
+			if (req.files.coverImage) {
+				fs.unlinkSync(req.files.coverImage[0].path);
+			}
+		}
 		res.status(500).json({
 			message: "Server error",
 			error: error.message,
