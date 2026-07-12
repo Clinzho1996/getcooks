@@ -1,12 +1,12 @@
+// models/WalletTransaction.js
 import mongoose from "mongoose";
 
-const walletSchema = new mongoose.Schema(
+const walletTransactionSchema = new mongoose.Schema(
 	{
 		cookId: {
 			type: mongoose.Schema.Types.ObjectId,
 			ref: "User",
 			required: true,
-			index: true,
 		},
 		type: {
 			type: String,
@@ -20,34 +20,21 @@ const walletSchema = new mongoose.Schema(
 		reference: {
 			type: String,
 			required: true,
-			index: true,
-		},
-		status: {
-			type: String,
-			default: "success",
-			enum: ["pending", "success", "failed"],
 		},
 		description: {
 			type: String,
 			default: "",
 		},
-		orderId: {
-			type: mongoose.Schema.Types.ObjectId,
-			ref: "Order",
-		},
-		commission: {
-			type: Number,
-			default: 0,
-		},
-		balanceAfter: {
-			type: Number,
-			default: 0,
+		status: {
+			type: String,
+			enum: ["pending", "success", "failed"],
+			default: "success",
 		},
 	},
 	{ timestamps: true },
 );
 
-// Add compound index for better query performance
-walletSchema.index({ cookId: 1, createdAt: -1 });
+walletTransactionSchema.index({ cookId: 1 });
+walletTransactionSchema.index({ reference: 1 });
 
-export default mongoose.model("WalletTransaction", walletSchema);
+export default mongoose.model("WalletTransaction", walletTransactionSchema);

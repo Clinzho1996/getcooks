@@ -1,4 +1,5 @@
-// models/User.js - Updated with social auth fields
+// models/User.js - Fixed
+
 import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
@@ -25,7 +26,7 @@ const userSchema = new mongoose.Schema(
 		},
 		isCook: { type: Boolean, default: false },
 
-		// Social Auth Fields
+		// ✅ Keep unique: true here, remove the schema.index() below
 		firebaseUid: { type: String, unique: true, sparse: true },
 		appleUserId: { type: String, unique: true, sparse: true },
 		provider: {
@@ -50,12 +51,10 @@ const userSchema = new mongoose.Schema(
 			region: String,
 		},
 
-		// Referral
 		referralCode: { type: String, unique: true, sparse: true },
 		referredBy: { type: mongoose.Types.ObjectId, ref: "User", default: null },
 		savedCooks: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
-		// Push Notifications
 		pushTokens: {
 			type: [
 				{
@@ -88,7 +87,6 @@ const userSchema = new mongoose.Schema(
 		isVerified: { type: Boolean, default: false },
 		favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
-		// Admin password (only for admin role)
 		password: {
 			type: String,
 			required: function () {
@@ -103,7 +101,6 @@ const userSchema = new mongoose.Schema(
 			default: "active",
 		},
 
-		// Suspension fields
 		isSuspended: { type: Boolean, default: false },
 		suspensionReason: { type: String, default: null },
 		suspensionNote: { type: String, default: null },
@@ -125,8 +122,11 @@ const userSchema = new mongoose.Schema(
 	{ timestamps: true },
 );
 
+// ✅ Remove these duplicate index declarations since unique: true is already set above
+// userSchema.index({ firebaseUid: 1 }, { unique: true, sparse: true });
+// userSchema.index({ appleUserId: 1 }, { unique: true, sparse: true });
+
+// Keep only the geospatial index
 userSchema.index({ location: "2dsphere" });
-userSchema.index({ firebaseUid: 1 });
-userSchema.index({ appleUserId: 1 });
 
 export default mongoose.model("User", userSchema);

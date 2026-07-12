@@ -7,9 +7,18 @@ import { createAdminNotification } from "../utils/adminNotification.js";
 /**
  * Request payout
  */
+// controllers/payoutController.js - Fixed requestPayout
+
+import axios from "axios";
+import User from "../models/User.js";
+import { sendPushToUser } from "../services/pushService.js";
+
+/**
+ * Request payout
+ */
 export const requestPayout = async (req, res) => {
 	try {
-		const { amount } = req.body; // amount should be in naira
+		const { amount } = req.body;
 		const userId = req.user._id;
 
 		if (!amount || amount <= 0) {
@@ -22,8 +31,10 @@ export const requestPayout = async (req, res) => {
 			return res.status(404).json({ message: "Cook profile not found" });
 		}
 
-		if (!cookProfile.bankDetails) {
-			return res.status(400).json({ message: "Bank details not set" });
+		if (!cookProfile.bankDetails || !cookProfile.bankDetails.accountNumber) {
+			return res.status(400).json({
+				message: "Bank details not set. Please add your bank account first.",
+			});
 		}
 
 		console.log(
@@ -35,7 +46,7 @@ export const requestPayout = async (req, res) => {
 
 		if (cookProfile.walletBalance < amount) {
 			return res.status(400).json({
-				message: `Insufficient balance. Your wallet has ${cookProfile.walletBalance}`,
+				message: `Insufficient balance. Your wallet has ₦${cookProfile.walletBalance}`,
 			});
 		}
 
@@ -43,64 +54,159 @@ export const requestPayout = async (req, res) => {
 
 		// Create recipient if missing
 		if (!recipientCode) {
-			const recipient = await paystack.post("/transferrecipient", {
-				type: "nuban",
-				name: req.user.fullName,
-				account_number: cookProfile.bankDetails.accountNumber,
-				bank_code: cookProfile.bankDetails.bankCode,
-				currency: "NGN",
-			});
+			try {
+				// ✅ Use axios directly with proper Paystack API format
+				const recipientResponse = await axios.post(
+					"https://api.paystack.co/transferrecipient",
+					{
+						type: "nuban",
+						name:
+							cookProfile.cookDisplayName ||
+							cookProfile.storeName ||
+							req.user.fullName,
+						account_number: cookProfile.bankDetails.accountNumber,
+						bank_code: cookProfile.bankDetails.bankCode,
+						currency: "NGN",
+					},
+					{
+						headers: {
+							Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+							"Content-Type": "application/json",
+						},
+					},
+				);
 
-			if (!recipient.data.data.recipient_code) {
-				console.error("Paystack recipient creation failed", recipient.data);
-				return res
-					.status(500)
-					.json({ message: "Failed to create transfer recipient" });
+				console.log("Recipient creation response:", recipientResponse.data);
+
+				if (
+					!recipientResponse.data.status ||
+					!recipientResponse.data.data?.recipient_code
+				) {
+					console.error(
+						"Paystack recipient creation failed",
+						recipientResponse.data,
+					);
+					return res.status(500).json({
+						message: "Failed to create transfer recipient",
+						error: recipientResponse.data.message,
+					});
+				}
+
+				recipientCode = recipientResponse.data.data.recipient_code;
+				cookProfile.bankDetails.recipientCode = recipientCode;
+				await cookProfile.save();
+
+				console.log(`✅ Recipient created: ${recipientCode}`);
+			} catch (recipientError) {
+				console.error(
+					"Recipient creation error:",
+					recipientError.response?.data || recipientError.message,
+				);
+				return res.status(500).json({
+					message: "Failed to create transfer recipient",
+					error: recipientError.response?.data || recipientError.message,
+				});
 			}
-
-			cookProfile.bankDetails.recipientCode =
-				recipient.data.data.recipient_code;
-			await cookProfile.save();
-			recipientCode = recipient.data.data.recipient_code;
 		}
 
-		// Initiate transfer (amount in kobo)
-		const transfer = await paystack.post("/transfer", {
-			source: "balance",
-			amount: amount * 100, // Convert naira → kobo
-			recipient: recipientCode,
-		});
+		// Initiate transfer
+		try {
+			const transferResponse = await axios.post(
+				"https://api.paystack.co/transfer",
+				{
+					source: "balance",
+					amount: amount * 100, // Convert naira to kobo
+					recipient: recipientCode,
+					reason: `Payout for ${cookProfile.storeName}`,
+				},
+				{
+					headers: {
+						Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+						"Content-Type": "application/json",
+					},
+				},
+			);
 
-		const transferData = transfer.data.data;
+			console.log("Transfer response:", transferResponse.data);
 
-		// Record pending transfer internally
-		await PendingTransfer.create({
-			cookId: userId,
-			amount,
-			transferCode: transferData.transfer_code,
-			status: transferData.status === "otp" ? "pending_otp" : "pending",
-		});
+			if (!transferResponse.data.status) {
+				console.error("Transfer initiation failed:", transferResponse.data);
+				return res.status(400).json({
+					message: "Transfer initiation failed",
+					error: transferResponse.data.message,
+				});
+			}
 
-		console.log("Paystack transfer initiated", transferData);
+			const transferData = transferResponse.data.data;
 
-		return res.status(200).json({
-			message: "Payout request received and is being processed",
-			amount,
-		});
+			// Deduct from wallet
+			cookProfile.walletBalance -= amount;
+			await cookProfile.save();
 
-		await createAdminNotification({
-			title: "Payout Requested",
-			body: `A new payout request has been submitted for ${req.user.fullName}`,
-			type: "cook",
-			data: { cookId: userId },
-		});
+			// Also deduct from User wallet
+			const user = await User.findById(userId);
+			if (user) {
+				user.walletBalance = (user.walletBalance || 0) - amount;
+				await user.save();
+			}
 
-		await sendPushToUser(
-			userId,
-			"Payout Requested",
-			`Your payout request for ${amount} NGN has been received and is being processed.`,
-			{ amount },
-		);
+			// Record pending transfer
+			await PendingTransfer.create({
+				cookId: userId,
+				amount,
+				transferCode: transferData.transfer_code,
+				status: transferData.status === "otp" ? "pending_otp" : "pending",
+			});
+
+			// Create transaction record
+			await WalletTransaction.create({
+				cookId: userId,
+				type: "payout",
+				amount: amount,
+				reference: transferData.transfer_code,
+				description: `Payout of ₦${amount} to bank account`,
+				status: "pending",
+			});
+
+			console.log("✅ Paystack transfer initiated", transferData);
+
+			// Send notifications
+			await createAdminNotification({
+				title: "Payout Requested",
+				body: `A new payout request of ₦${amount} has been submitted by ${req.user.fullName}`,
+				type: "cook",
+				data: { cookId: userId, amount },
+			});
+
+			await sendPushToUser(
+				userId,
+				"💰 Payout Requested",
+				`Your payout request for ₦${amount} has been received.`,
+				{ amount },
+			);
+
+			return res.status(200).json({
+				success: true,
+				message: "Payout request initiated successfully",
+				data: {
+					amount,
+					transferCode: transferData.transfer_code,
+					status: transferData.status,
+					requiresOTP: transferData.status === "otp",
+				},
+			});
+		} catch (transferError) {
+			console.error(
+				"Transfer error:",
+				transferError.response?.data || transferError.message,
+			);
+
+			// Don't deduct wallet if transfer failed
+			return res.status(500).json({
+				message: "Transfer initiation failed",
+				error: transferError.response?.data || transferError.message,
+			});
+		}
 	} catch (err) {
 		console.error(
 			"Payout initiation error:",

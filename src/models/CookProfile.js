@@ -1,4 +1,5 @@
-// models/CookProfile.js - Updated
+// models/CookProfile.js - Fixed
+
 import mongoose from "mongoose";
 
 const cookProfileSchema = new mongoose.Schema(
@@ -10,22 +11,19 @@ const cookProfileSchema = new mongoose.Schema(
 			unique: true,
 		},
 
-		// Store Information
 		storeName: { type: String, required: true },
 		storeHandle: {
 			type: String,
 			required: true,
-			unique: true,
+			unique: true, // ✅ Keep this, remove the schema.index() below
 			lowercase: true,
 		},
 		storeLink: { type: String, required: true },
 		storeDescription: { type: String, maxlength: 500 },
 
-		// Contact Information
 		phone: { type: String, required: true },
 		email: { type: String, required: true },
 
-		// Location
 		state: { type: String, required: true },
 		kitchenAddress: { type: String, required: true },
 		pickupLandmark: { type: String },
@@ -42,7 +40,6 @@ const cookProfileSchema = new mongoose.Schema(
 			},
 		},
 
-		// Pickup & Delivery Settings
 		pickupWindow: {
 			from: { type: String, required: true },
 			to: { type: String, required: true },
@@ -51,15 +48,12 @@ const cookProfileSchema = new mongoose.Schema(
 		deliveryFee: { type: Number, default: 0 },
 		preparationDays: { type: Number, default: 1, min: 1 },
 
-		// Images
 		profileImage: { type: String },
 		coverImage: { type: String },
 
-		// Terms
 		termsAccepted: { type: Boolean, default: false },
 		termsAcceptedAt: { type: Date },
 
-		// Status
 		isApproved: { type: Boolean, default: false },
 		isAvailable: { type: Boolean, default: true },
 		isSuspended: { type: Boolean, default: false },
@@ -68,7 +62,6 @@ const cookProfileSchema = new mongoose.Schema(
 		suspendedAt: { type: Date },
 		suspendedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 
-		// Statistics
 		rating: { type: Number, default: 0 },
 		reviewsCount: { type: Number, default: 0 },
 		ordersCount: { type: Number, default: 0 },
@@ -81,7 +74,6 @@ const cookProfileSchema = new mongoose.Schema(
 			},
 		],
 
-		// Bank Details (for payouts)
 		bankDetails: {
 			bankName: String,
 			bankCode: String,
@@ -93,8 +85,11 @@ const cookProfileSchema = new mongoose.Schema(
 	{ timestamps: true },
 );
 
-// Indexes
+// ✅ Only keep ONE index declaration - remove the duplicate
+// Remove this line if you have unique: true above:
+// cookProfileSchema.index({ storeHandle: 1 }, { unique: true });
+
+// Keep this for geospatial queries
 cookProfileSchema.index({ location: "2dsphere" });
-cookProfileSchema.index({ storeHandle: 1 });
 
 export default mongoose.model("CookProfile", cookProfileSchema);

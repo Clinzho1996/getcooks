@@ -5,6 +5,8 @@ import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
 import Meal from "../models/Meal.js";
 import Order from "../models/Order.js";
+import User from "../models/User.js";
+import WalletTransaction from "../models/WalletTransaction.js";
 import { sendPushToUser } from "../services/pushService.js";
 
 // ============================================
@@ -621,11 +623,6 @@ export const getOrderDetails = async (req, res) => {
 	}
 };
 
-// Update order status
-// controllers/orderController.js - Updated updateOrderStatus with transitions
-
-// controllers/orderController.js - Fixed updateOrderStatus
-
 export const updateOrderStatus = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -636,16 +633,6 @@ export const updateOrderStatus = async (req, res) => {
 			return res.status(400).json({ message: "Status is required" });
 		}
 
-		const order = await Order.findOne({
-			_id: orderId,
-			cookId: userId,
-		});
-
-		if (!order) {
-			return res.status(404).json({ message: "Order not found" });
-		}
-
-		// ✅ Valid statuses - must match model enum exactly
 		const validStatuses = [
 			"pending",
 			"confirmed",
@@ -657,7 +644,6 @@ export const updateOrderStatus = async (req, res) => {
 			"cancelled",
 		];
 
-		// ✅ Check if status is valid
 		if (!validStatuses.includes(status)) {
 			return res.status(400).json({
 				message: `Invalid status. Allowed values: ${validStatuses.join(", ")}`,
@@ -665,14 +651,27 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
-		// ✅ Check if status is already set
-		if (order.status === status) {
+		const order = await Order.findOne({
+			_id: orderId,
+			cookId: userId,
+		});
+
+		if (!order) {
+			return res.status(404).json({ message: "Order not found" });
+		}
+
+		// ✅ Check if order is paid before allowing completion
+		if (
+			(status === "delivered" || status === "picked_up") &&
+			order.paymentStatus !== "paid"
+		) {
 			return res.status(400).json({
-				message: `Order is already in '${status}' status`,
+				message: "Cannot complete order. Payment has not been confirmed.",
+				paymentStatus: order.paymentStatus,
 			});
 		}
 
-		// ✅ Define allowed transitions
+		// Validate transition
 		const allowedTransitions = {
 			pending: ["confirmed", "cancelled"],
 			confirmed: ["preparing", "cancelled"],
@@ -684,62 +683,167 @@ export const updateOrderStatus = async (req, res) => {
 			cancelled: [],
 		};
 
-		// ✅ Check if transition is allowed
 		const allowedNext = allowedTransitions[order.status] || [];
-		if (!allowedNext.includes(status) && allowedNext.length > 0) {
+		const isSameStatus = order.status === status;
+		const isAllowedTransition = allowedNext.includes(status);
+
+		if (!isAllowedTransition && !isSameStatus && allowedNext.length > 0) {
 			return res.status(400).json({
-				message: `Cannot transition from '${order.status}' to '${status}'. Allowed: ${allowedNext.join(", ")}`,
-				currentStatus: order.status,
-				requestedStatus: status,
-				allowedTransitions: allowedNext,
+				message: `Cannot transition from '${order.status}' to '${status}'`,
+				allowed: allowedNext,
 			});
 		}
 
-		// ✅ Special validation for out_for_delivery
+		// Delivery type validation
 		if (status === "out_for_delivery" && order.deliveryType !== "delivery") {
 			return res.status(400).json({
-				message:
-					"Cannot set 'out_for_delivery' for pickup orders. Use 'ready' then 'picked_up'.",
-				deliveryType: order.deliveryType,
-				suggestion: "For pickup orders: ready → picked_up",
+				message: "out_for_delivery is only for delivery orders",
+				suggestion: "Use 'picked_up' for pickup orders",
 			});
 		}
 
-		// ✅ Special validation for picked_up
-		if (status === "picked_up" && order.deliveryType !== "pickup") {
-			return res.status(400).json({
-				message:
-					"Cannot set 'picked_up' for delivery orders. Use 'out_for_delivery' then 'delivered'.",
-				deliveryType: order.deliveryType,
-				suggestion: "For delivery orders: ready → out_for_delivery → delivered",
-			});
-		}
-
-		// ✅ Special validation for delivered
 		if (status === "delivered" && order.deliveryType !== "delivery") {
 			return res.status(400).json({
-				message:
-					"Cannot set 'delivered' for pickup orders. Use 'picked_up' instead.",
-				deliveryType: order.deliveryType,
-				suggestion: "For pickup orders: ready → picked_up",
+				message: "delivered is only for delivery orders",
+				suggestion: "Use 'picked_up' for pickup orders",
+			});
+		}
+
+		if (status === "picked_up" && order.deliveryType !== "pickup") {
+			return res.status(400).json({
+				message: "picked_up is only for pickup orders",
+				suggestion:
+					"Use 'out_for_delivery' then 'delivered' for delivery orders",
 			});
 		}
 
 		const oldStatus = order.status;
-		order.status = status;
-		if (sellerNote) order.sellerNote = sellerNote;
 
-		await order.save();
+		// ✅ CREDIT WALLET when order is delivered or picked up
+		let walletCredited = false;
+		let walletAmount = 0;
+		let cook = null;
 
-		// Send push notification (optional)
-		try {
-			// You can implement push notification here
-			console.log(`📱 Order ${order._id} status updated to ${status}`);
-		} catch (pushError) {
-			console.error("Push notification error:", pushError.message);
+		const isCompletingOrder =
+			(status === "delivered" || status === "picked_up") &&
+			order.paymentStatus === "paid";
+		const isAlreadyCompleted =
+			(order.status === "delivered" || order.status === "picked_up") &&
+			order.paymentStatus === "paid";
+
+		if (isCompletingOrder || (isSameStatus && isAlreadyCompleted)) {
+			try {
+				// Check if already credited
+				let existingTransaction = null;
+				try {
+					existingTransaction = await WalletTransaction.findOne({
+						reference: order._id.toString(),
+						type: "credit",
+					});
+				} catch (txError) {
+					console.log(
+						"WalletTransaction model might not exist yet, creating...",
+					);
+				}
+
+				if (!existingTransaction) {
+					// Calculate cook's earnings (subtract 10% platform fee)
+					const commissionRate = 0.1;
+					const commission = order.totalAmount * commissionRate;
+					const cookAmount =
+						Math.round((order.totalAmount - commission) * 100) / 100;
+
+					// Find cook user
+					cook = await User.findById(order.cookId);
+					if (!cook) {
+						console.error(`Cook not found for order ${order._id}`);
+						return res.status(404).json({ message: "Cook not found" });
+					}
+
+					// Update cook wallet
+					const previousBalance = cook.walletBalance || 0;
+					cook.walletBalance =
+						Math.round((previousBalance + cookAmount) * 100) / 100;
+					await cook.save();
+
+					// Update CookProfile wallet
+					const cookProfile = await CookProfile.findOne({
+						userId: order.cookId,
+					});
+					if (cookProfile) {
+						cookProfile.walletBalance =
+							Math.round((cookProfile.walletBalance || 0 + cookAmount) * 100) /
+							100;
+						await cookProfile.save();
+					}
+
+					// Create wallet transaction
+					try {
+						await WalletTransaction.create({
+							cookId: cook._id,
+							type: "credit",
+							amount: cookAmount,
+							reference: order._id.toString(),
+							description: `Order #${order._id.toString().slice(-6)} payment`,
+							status: "success",
+						});
+					} catch (txError) {
+						console.error(
+							"Failed to create WalletTransaction:",
+							txError.message,
+						);
+					}
+
+					walletCredited = true;
+					walletAmount = cookAmount;
+
+					console.log(
+						`💰 Cook ${cook._id} wallet credited with ₦${cookAmount.toFixed(2)}`,
+					);
+
+					// Send push notification
+					try {
+						await sendPushToUser(
+							order.cookId,
+							"💰 Payment Received!",
+							`You earned ₦${cookAmount.toFixed(2)} from order #${order._id.toString().slice(-6)}`,
+							{
+								type: "wallet_credit",
+								orderId: order._id.toString(),
+								amount: cookAmount.toString(),
+								newBalance: cook.walletBalance.toString(),
+							},
+						);
+					} catch (pushError) {
+						console.error("Push error:", pushError.message);
+					}
+				} else {
+					console.log(`Order ${order._id} already credited`);
+					walletCredited = true;
+					walletAmount = existingTransaction?.amount || 0;
+
+					// ✅ Fetch the cook to get current balance
+					cook = await User.findById(order.cookId);
+				}
+			} catch (error) {
+				console.error("Error crediting wallet:", error);
+			}
 		}
 
-		// ✅ Return updated order
+		// Update order status (only if status is different)
+		if (oldStatus !== status) {
+			order.status = status;
+		}
+		if (sellerNote) order.sellerNote = sellerNote;
+		await order.save();
+
+		// ✅ Fetch fresh cook data for accurate balance
+		if (!cook) {
+			cook = await User.findById(order.cookId);
+		}
+		const currentBalance = cook?.walletBalance || 0;
+
+		// Get updated order with populated fields
 		const updatedOrder = await Order.findById(order._id)
 			.populate("customerId", "fullName phoneNumber email")
 			.populate("items.productId", "name images");
@@ -752,6 +856,18 @@ export const updateOrderStatus = async (req, res) => {
 				from: oldStatus,
 				to: status,
 			},
+			wallet: walletCredited
+				? {
+						credited: true,
+						amount: walletAmount,
+						newBalance: currentBalance,
+						message: `₦${walletAmount.toFixed(2)} credited to your wallet. New balance: ₦${currentBalance.toFixed(2)}`,
+					}
+				: {
+						credited: false,
+						currentBalance: currentBalance,
+						message: "No wallet credit applied.",
+					},
 		});
 	} catch (error) {
 		console.error("Update order status error:", error);

@@ -7,13 +7,11 @@ import {
 	updateReview,
 } from "../controllers/reviewController.js";
 
-import protect from "../middleware/auth.js";
-
 const router = express.Router();
 
-router.post("/", protect, createReview);
+router.post("/", createReview);
 
-router.put("/:id", protect, updateReview);
+router.put("/:id", updateReview);
 
 router.get("/meal/:mealId", getMealReviews);
 

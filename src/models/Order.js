@@ -1,4 +1,4 @@
-// models/Order.js - Add out_for_delivery to enum
+// models/Order.js - Clean version
 
 import mongoose from "mongoose";
 
@@ -71,7 +71,6 @@ const orderSchema = new mongoose.Schema(
 		paymentReference: String,
 		paymentLink: String,
 
-		// ✅ Status - Make sure out_for_delivery is in the enum
 		status: {
 			type: String,
 			enum: [
@@ -79,7 +78,7 @@ const orderSchema = new mongoose.Schema(
 				"confirmed",
 				"preparing",
 				"ready",
-				"out_for_delivery", // ✅ This must be here
+				"out_for_delivery",
 				"picked_up",
 				"delivered",
 				"cancelled",

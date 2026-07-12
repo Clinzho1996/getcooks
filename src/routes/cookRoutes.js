@@ -13,7 +13,6 @@ import {
 	toggleStoreAvailability,
 	updateCookProfile,
 	updateCookProfileWithImages,
-	updateOrderStatus,
 } from "../controllers/cookController.js";
 import {
 	createProduct,
@@ -27,6 +26,7 @@ import {
 	createCustomOrder,
 	declineOrderRequest,
 	getOrderRequests,
+	updateOrderStatus,
 } from "../controllers/orderController.js";
 import protect from "../middleware/auth.js";
 
