@@ -54,7 +54,7 @@ const cookProfileSchema = new mongoose.Schema(
 		termsAccepted: { type: Boolean, default: false },
 		termsAcceptedAt: { type: Date },
 
-		isApproved: { type: Boolean, default: false },
+		isApproved: { type: Boolean, default: true },
 		isAvailable: { type: Boolean, default: true },
 		isSuspended: { type: Boolean, default: false },
 		suspensionReason: { type: String },
