@@ -306,6 +306,8 @@ export const getCookProfile = async (req, res) => {
 // ============================================
 // UPDATE COOK PROFILE
 // ============================================
+// controllers/cookController.js - Updated updateCookProfile with fees toggle
+
 export const updateCookProfile = async (req, res) => {
 	try {
 		const userId = req.user.id;
@@ -330,7 +332,7 @@ export const updateCookProfile = async (req, res) => {
 			"location",
 		];
 
-		// Fields that go to CookProfile model (all new fields)
+		// Fields that go to CookProfile model
 		const cookFields = [
 			// Store info
 			"storeName",
@@ -365,6 +367,8 @@ export const updateCookProfile = async (req, res) => {
 			"availablePickup",
 			"schedule",
 			"isAvailable",
+			// ✅ Fee settings
+			"fees",
 		];
 
 		// Update User model (only if provided)
@@ -389,7 +393,15 @@ export const updateCookProfile = async (req, res) => {
 		// Update CookProfile model
 		cookFields.forEach((field) => {
 			if (updates[field] !== undefined) {
-				cookProfile[field] = updates[field];
+				// ✅ Handle fees object specially (merge instead of replace)
+				if (field === "fees" && typeof updates[field] === "object") {
+					cookProfile.fees = {
+						...cookProfile.fees,
+						...updates.fees,
+					};
+				} else {
+					cookProfile[field] = updates[field];
+				}
 			}
 		});
 

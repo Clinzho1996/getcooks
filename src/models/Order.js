@@ -58,7 +58,13 @@ const orderSchema = new mongoose.Schema(
 
 		subtotal: { type: Number, required: true },
 		serviceFee: { type: Number, required: true },
+		paystackFee: { type: Number, default: 0 },
 		totalAmount: { type: Number, required: true },
+
+		feesAddedToCustomer: {
+			type: Boolean,
+			default: true,
+		},
 
 		paymentMethod: {
 			type: String,

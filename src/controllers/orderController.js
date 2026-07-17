@@ -24,7 +24,7 @@ export const createCustomerOrder = async (req, res) => {
 			deliveryType,
 			deliveryAddress,
 			readyDate,
-			foodRequest, // What they want to order
+			foodRequest,
 		} = req.body;
 
 		// Validate required fields
@@ -275,294 +275,6 @@ export const getCustomerOrderDetails = async (req, res) => {
 	}
 };
 
-// controllers/orderController.js - Fixed createOrderFromCart
-
-export const createOrderFromCart = async (req, res) => {
-	try {
-		const {
-			sessionId,
-			customerName,
-			customerPhone,
-			customerEmail,
-			customerNote,
-			deliveryType,
-			deliveryAddress,
-			readyDate,
-		} = req.body;
-
-		// Validate required fields
-		if (
-			!sessionId ||
-			!customerName ||
-			!customerPhone ||
-			!deliveryType ||
-			!readyDate
-		) {
-			return res.status(400).json({
-				message:
-					"Session ID, customer name, phone, delivery type, and ready date are required",
-			});
-		}
-
-		// Validate phone number
-		const phoneRegex = /^[0-9]{11}$/;
-		if (!phoneRegex.test(customerPhone.replace(/\D/g, ""))) {
-			return res.status(400).json({
-				message: "Please enter a valid 11-digit phone number",
-			});
-		}
-
-		// Get cart
-		const cart = await Cart.findOne({ sessionId });
-		if (!cart || cart.items.length === 0) {
-			return res.status(400).json({ message: "Cart is empty" });
-		}
-
-		// Get cook ID from first item
-		const firstProduct = await Meal.findById(cart.items[0].productId);
-		if (!firstProduct) {
-			return res.status(404).json({ message: "Product not found" });
-		}
-		const cookId = firstProduct.cookId;
-
-		// Check if cook exists and is available
-		const cook = await CookProfile.findOne({ userId: cookId });
-		if (!cook) {
-			return res.status(404).json({ message: "Cook not found" });
-		}
-		if (!cook.isAvailable) {
-			return res.status(400).json({ message: "Store is currently paused" });
-		}
-		if (!cook.isApproved) {
-			return res.status(400).json({ message: "Store is pending approval" });
-		}
-
-		// Validate ready date
-		const readyDateTime = new Date(readyDate);
-		if (readyDateTime < new Date()) {
-			return res
-				.status(400)
-				.json({ message: "Ready date must be in the future" });
-		}
-
-		// Validate delivery address ONLY if delivery type is delivery
-		if (deliveryType === "delivery" && !deliveryAddress) {
-			return res.status(400).json({
-				message: "Delivery address is required for delivery orders",
-			});
-		}
-
-		// Check if customer exists, if not create them
-		let customer = await Customer.findOne({
-			cookId,
-			phoneNumber: customerPhone.replace(/\D/g, ""),
-		});
-
-		if (!customer) {
-			customer = await Customer.create({
-				cookId,
-				fullName: customerName,
-				phoneNumber: customerPhone.replace(/\D/g, ""),
-				email: customerEmail || "",
-				isActive: true,
-			});
-		}
-
-		// Build order items from cart
-		const orderItems = [];
-		let subtotal = 0;
-
-		for (const cartItem of cart.items) {
-			const product = await Meal.findById(cartItem.productId);
-			if (!product) {
-				return res.status(404).json({
-					message: `Product not found: ${cartItem.productId}`,
-				});
-			}
-
-			if (!product.isAvailable) {
-				return res.status(400).json({
-					message: `${product.name} is currently unavailable`,
-				});
-			}
-
-			// Use product price (not customerPrice) for subtotal calculation
-			const itemPrice = product.price;
-			let itemSubtotal = itemPrice * cartItem.quantity;
-
-			// Process add-ons
-			const addOns = [];
-			let addOnTotal = 0;
-
-			if (cartItem.addOns && cartItem.addOns.length) {
-				for (const addOn of cartItem.addOns) {
-					let productAddOn = product.addOns.find(
-						(a) => a.name.toLowerCase() === addOn.name.toLowerCase(),
-					);
-
-					if (productAddOn) {
-						const addOnPrice = productAddOn.price;
-						const addOnSubtotal = addOnPrice * cartItem.quantity;
-						addOnTotal += addOnSubtotal;
-						addOns.push({
-							name: productAddOn.name,
-							price: addOnPrice,
-						});
-					} else if (addOn.name && addOn.price) {
-						const addOnSubtotal = addOn.price * cartItem.quantity;
-						addOnTotal += addOnSubtotal;
-						addOns.push({
-							name: addOn.name,
-							price: addOn.price,
-						});
-					}
-				}
-			}
-
-			// ✅ Add add-on total to item subtotal
-			const totalItemSubtotal = itemSubtotal + addOnTotal;
-			subtotal += totalItemSubtotal;
-
-			orderItems.push({
-				productId: product._id,
-				name: product.name,
-				quantity: cartItem.quantity,
-				price: itemPrice,
-				addOns,
-				subtotal: totalItemSubtotal, // ✅ This now includes add-ons
-			});
-		}
-
-		// ✅ Calculate fees based on CORRECT subtotal
-		const serviceFee = subtotal * 0.05; // 5% platform fee
-		const paystackFee = (subtotal + serviceFee) * 0.015 + 1; // 1.5% + 1 naira
-		const deliveryFee = deliveryType === "delivery" ? cook.deliveryFee || 0 : 0;
-
-		// ✅ Calculate total correctly
-		const totalAmount =
-			Math.round((subtotal + serviceFee + paystackFee + deliveryFee) * 100) /
-			100;
-
-		console.log("💰 Order Calculation:", {
-			subtotal: subtotal,
-			serviceFee: serviceFee,
-			paystackFee: paystackFee,
-			deliveryFee: deliveryFee,
-			totalAmount: totalAmount,
-		});
-
-		// Create order
-		const orderData = {
-			cookId,
-			customerId: customer._id,
-			customerName,
-			customerPhone: customerPhone.replace(/\D/g, ""),
-			customerEmail: customerEmail || "",
-			customerNote: customerNote || "",
-			deliveryType,
-			deliveryAddress: deliveryType === "delivery" ? deliveryAddress : null,
-			deliveryFee: deliveryFee,
-			readyDate: readyDateTime,
-			readyTime: "12:00",
-			status: "pending",
-			paymentStatus: "pending",
-			orderType: "product_order",
-			items: orderItems,
-			subtotal: Math.round(subtotal * 100) / 100,
-			serviceFee: Math.round((serviceFee + paystackFee) * 100) / 100,
-			totalAmount: totalAmount,
-			pickupWindow: {
-				from: cook.pickupWindow.from,
-				to: cook.pickupWindow.to,
-			},
-			sessionId: sessionId,
-		};
-
-		const order = await Order.create(orderData);
-
-		// Update customer stats
-		await Customer.findByIdAndUpdate(customer._id, {
-			$inc: { ordersCount: 1, totalSpent: totalAmount },
-			$set: { lastOrderDate: new Date() },
-		});
-
-		// Generate payment link
-		const paymentReference =
-			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-		order.paymentReference = paymentReference;
-
-		const paystackResponse = await axios.post(
-			"https://api.paystack.co/transaction/initialize",
-			{
-				email: customerEmail || `${customerPhone}@getameal.com`,
-				amount: Math.round(totalAmount * 100),
-				reference: paymentReference,
-				callback_url: `${process.env.API_URL}/customer/payment/callback`,
-				metadata: {
-					orderId: order._id.toString(),
-					cookId: cookId.toString(),
-					customerName,
-					customerPhone: customerPhone.replace(/\D/g, ""),
-					sessionId: sessionId,
-				},
-			},
-			{
-				headers: {
-					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
-				},
-			},
-		);
-
-		order.paymentLink = paystackResponse.data.data.authorization_url;
-		await order.save();
-
-		// Send push notification to cook
-		await sendPushToUser(
-			cookId,
-			"New Order Received 🆕",
-			`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-			{
-				type: "new_order",
-				orderId: order._id.toString(),
-			},
-		);
-
-		res.status(201).json({
-			success: true,
-			message:
-				"Order created successfully. Complete payment to confirm your order.",
-			order: {
-				id: order._id,
-				customerName: order.customerName,
-				customerPhone: order.customerPhone,
-				deliveryType: order.deliveryType,
-				deliveryAddress: order.deliveryAddress || null,
-				readyDate: order.readyDate,
-				totalAmount: order.totalAmount,
-				subtotal: order.subtotal,
-				serviceFee: order.serviceFee,
-				deliveryFee: order.deliveryFee,
-				status: order.status,
-				paymentStatus: order.paymentStatus,
-				paymentLink: order.paymentLink,
-				items: order.items.map((item) => ({
-					name: item.name,
-					quantity: item.quantity,
-					price: item.price,
-					addOns: item.addOns,
-					subtotal: item.subtotal,
-				})),
-			},
-		});
-	} catch (error) {
-		console.error("Create order from cart error:", error);
-		res.status(500).json({
-			message: "Failed to create order",
-			error: error.message,
-		});
-	}
-};
-
 // ============================================
 // PAYMENT REDIRECT
 // ============================================
@@ -757,11 +469,6 @@ export const handlePaymentCallback = async (req, res) => {
 	}
 };
 
-// ============================================
-// COOK ORDER MANAGEMENT (Authenticated)
-// ============================================
-
-// Get all orders for cook
 export const getCookOrders = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -821,6 +528,8 @@ export const getOrderDetails = async (req, res) => {
 		res.status(500).json({ message: error.message });
 	}
 };
+
+// controllers/orderController.js - Updated updateOrderStatus with correct 5% platform fee
 
 export const updateOrderStatus = async (req, res) => {
 	try {
@@ -946,11 +655,35 @@ export const updateOrderStatus = async (req, res) => {
 				}
 
 				if (!existingTransaction) {
-					// Calculate cook's earnings (subtract 10% platform fee)
-					const commissionRate = 0.1;
-					const commission = order.totalAmount * commissionRate;
-					const cookAmount =
-						Math.round((order.totalAmount - commission) * 100) / 100;
+					// ✅ Calculate cook's earnings based on fee toggle
+					const feesAddedToCustomer = order.feesAddedToCustomer !== false; // Default: true
+					let cookAmount = 0;
+					let platformFee = 0;
+					let paystackFeeDeducted = 0;
+
+					if (feesAddedToCustomer) {
+						// ✅ Customer paid fees - deduct platform fee (5%)
+						const platformFeeRate = 0.05;
+						platformFee = order.totalAmount * platformFeeRate;
+						cookAmount =
+							Math.round((order.totalAmount - platformFee) * 100) / 100;
+						paystackFeeDeducted = 0; // Customer already paid Paystack fee
+					} else {
+						// ✅ Cook absorbs fees - deduct platform fee (5%) + Paystack fee from cook's payout
+						const platformFeeRate = 0.05;
+						platformFee = order.subtotal * platformFeeRate; // 5% on food subtotal only
+						const paystackFee = order.paystackFee || 0;
+
+						// Cook's earnings = totalAmount - platformFee - paystackFee
+						cookAmount =
+							Math.round(
+								(order.totalAmount - platformFee - paystackFee) * 100,
+							) / 100;
+						paystackFeeDeducted = paystackFee;
+					}
+
+					// Ensure cookAmount is not negative
+					if (cookAmount < 0) cookAmount = 0;
 
 					// Find cook user
 					cook = await User.findById(order.cookId);
@@ -983,7 +716,7 @@ export const updateOrderStatus = async (req, res) => {
 							type: "credit",
 							amount: cookAmount,
 							reference: order._id.toString(),
-							description: `Order #${order._id.toString().slice(-6)} payment`,
+							description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
 							status: "success",
 						});
 					} catch (txError) {
@@ -999,6 +732,12 @@ export const updateOrderStatus = async (req, res) => {
 					console.log(
 						`💰 Cook ${cook._id} wallet credited with ₦${cookAmount.toFixed(2)}`,
 					);
+					console.log(`   Total: ₦${order.totalAmount.toFixed(2)}`);
+					console.log(`   Platform Fee (5%): ₦${platformFee.toFixed(2)}`);
+					console.log(
+						`   Paystack Fee Deducted: ₦${paystackFeeDeducted.toFixed(2)}`,
+					);
+					console.log(`   Fees added to customer: ${feesAddedToCustomer}`);
 
 					// Send push notification
 					try {
@@ -1108,15 +847,13 @@ export const getOrderRequests = async (req, res) => {
 	}
 };
 
-// controllers/orderController.js - ONE SIMPLE ENDPOINT
-
 export const acceptOrderRequest = async (req, res) => {
 	try {
 		const userId = req.user._id;
 		const { requestId } = req.params;
 		const { amount } = req.body;
 
-		// Amount is required - cook sets the price
+		// Amount is required - cook sets the price for food
 		if (!amount || amount <= 0) {
 			return res.status(400).json({
 				message: "Please set a price for this order",
@@ -1138,18 +875,46 @@ export const acceptOrderRequest = async (req, res) => {
 			return res.status(404).json({ message: "Cook profile not found" });
 		}
 
-		// Calculate fees
-		const serviceFee = amount * 0.05;
-		const paystackFee = (amount + serviceFee) * 0.015 + 1;
-		const totalAmount =
-			Math.round(
-				(amount + serviceFee + paystackFee + (order.deliveryFee || 0)) * 100,
-			) / 100;
+		// ✅ Check if cook has fees enabled
+		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
 
-		// Update order with price
+		// ✅ Delivery fee - cook's own delivery fee
+		const deliveryFee = order.deliveryFee || 0;
+
+		// ✅ Calculate fees ONLY on food amount (NOT on delivery)
+		let serviceFee = 0;
+		let paystackFee = 0;
+		let totalAmount = 0;
+
+		if (addFeesToCustomer) {
+			// Fees added to customer (only on food)
+			serviceFee = amount * 0.05;
+			paystackFee = (amount + serviceFee) * 0.015 + 1;
+			totalAmount =
+				Math.round((amount + serviceFee + paystackFee + deliveryFee) * 100) /
+				100;
+		} else {
+			// Cook absorbs fees
+			totalAmount = Math.round((amount + deliveryFee) * 100) / 100;
+			serviceFee = amount * 0.05;
+			paystackFee = (amount + serviceFee) * 0.015 + 1;
+		}
+
+		console.log("💰 Custom Order Calculation:", {
+			foodAmount: amount,
+			deliveryFee: deliveryFee,
+			serviceFee: serviceFee,
+			paystackFee: paystackFee,
+			addFeesToCustomer: addFeesToCustomer,
+			totalAmount: totalAmount,
+		});
+
+		// Update order
 		order.subtotal = amount;
-		order.serviceFee = Math.round((serviceFee + paystackFee) * 100) / 100;
+		order.serviceFee = Math.round(serviceFee * 100) / 100;
+		order.paystackFee = Math.round(paystackFee * 100) / 100;
 		order.totalAmount = totalAmount;
+		order.feesAddedToCustomer = addFeesToCustomer;
 		order.status = "confirmed";
 		order.paymentStatus = "pending";
 		await order.save();
@@ -1184,15 +949,18 @@ export const acceptOrderRequest = async (req, res) => {
 		await order.save();
 
 		// Send WhatsApp with payment link
-		const whatsappMessage = `Hi ${order.customerName}! 
+		const whatsappMessage = `Hi ${order.customerName}! 🍽️
 
 Your order has been accepted by ${cook.storeName}!
 
-Order: ${order.customOrderTitle || order.customerNote}
-Amount: ₦${totalAmount.toFixed(2)}
-Ready: ${new Date(order.readyDate).toLocaleDateString()}
+📋 Order Details:
+• Order: ${order.customOrderTitle || order.customerNote || "Custom Order"}
+• Food Amount: ₦${amount.toFixed(2)}
+${deliveryFee > 0 ? `• Delivery Fee: ₦${deliveryFee.toFixed(2)}` : ""}
+• Total: ₦${totalAmount.toFixed(2)}
+• Ready: ${new Date(order.readyDate).toLocaleDateString()}
 
-Pay here: ${order.paymentLink}
+🔗 Pay here: ${order.paymentLink}
 
 Thank you for choosing ${cook.storeName}!`;
 
@@ -1205,7 +973,12 @@ Thank you for choosing ${cook.storeName}!`;
 				id: order._id,
 				customerName: order.customerName,
 				customerPhone: order.customerPhone,
+				subtotal: order.subtotal,
+				deliveryFee: order.deliveryFee,
+				serviceFee: order.serviceFee,
+				paystackFee: order.paystackFee,
 				totalAmount: order.totalAmount,
+				feesAddedToCustomer: order.feesAddedToCustomer,
 				paymentLink: order.paymentLink,
 				status: order.status,
 				whatsappUrl: whatsappUrl,
@@ -1281,6 +1054,8 @@ Thank you for choosing GetAMeal!`;
 	}
 };
 
+// controllers/orderController.js - Fixed createCustomOrder
+
 export const createCustomOrder = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -1311,6 +1086,8 @@ export const createCustomOrder = async (req, res) => {
 			return res.status(404).json({ message: "Cook profile not found" });
 		}
 
+		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
+
 		// Find or create customer
 		let customer = null;
 		if (customerId) {
@@ -1333,15 +1110,30 @@ export const createCustomOrder = async (req, res) => {
 			});
 		}
 
-		// Calculate fees
-		const serviceFee = amount * 0.05;
-		const paystackFee = (amount + serviceFee) * 0.015 + 1;
-		const totalAmount = amount + serviceFee + paystackFee + (deliveryFee || 0);
+		// ✅ Delivery fee - cook's own delivery fee
+		const deliveryFeeAmount = deliveryFee || 0;
+
+		// ✅ Calculate fees ONLY on food amount (NOT on delivery)
+		let serviceFee = 0;
+		let paystackFee = 0;
+		let totalAmount = 0;
+
+		if (addFeesToCustomer) {
+			serviceFee = amount * 0.05;
+			paystackFee = (amount + serviceFee) * 0.015 + 1;
+			totalAmount =
+				Math.round(
+					(amount + serviceFee + paystackFee + deliveryFeeAmount) * 100,
+				) / 100;
+		} else {
+			totalAmount = Math.round((amount + deliveryFeeAmount) * 100) / 100;
+			serviceFee = amount * 0.05;
+			paystackFee = (amount + serviceFee) * 0.015 + 1;
+		}
 
 		const paymentReference =
 			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
 
-		// ✅ FIX: Set status to "pending" so it shows in order requests
 		const order = await Order.create({
 			cookId: userId,
 			customerId: customer._id,
@@ -1351,17 +1143,19 @@ export const createCustomOrder = async (req, res) => {
 			customOrderTitle: title,
 			customOrderDescription: description,
 			deliveryType: deliveryType || "pickup",
-			deliveryFee: deliveryFee || 0,
+			deliveryFee: deliveryFeeAmount,
 			readyDate: new Date(readyDate),
 			readyTime: readyTime || "12:00",
 			pickupWindow: pickupWindow || cook.pickupWindow,
 			subtotal: amount,
-			serviceFee: serviceFee + paystackFee,
-			totalAmount,
+			serviceFee: Math.round(serviceFee * 100) / 100,
+			paystackFee: Math.round(paystackFee * 100) / 100,
+			totalAmount: totalAmount,
+			feesAddedToCustomer: addFeesToCustomer,
 			paymentMethod: "paystack",
 			paymentStatus: "pending",
 			paymentReference,
-			status: "pending", // ✅ Changed from "confirmed" to "pending"
+			status: "pending",
 			customerNote: customerNote || "",
 		});
 
@@ -1396,15 +1190,24 @@ export const createCustomOrder = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
-		await sendPushToUser(
-			userId,
-			"Custom Order Created 📝",
-			`Custom order "${title}" created for ${customer.fullName}`,
-			{
-				type: "custom_order_created",
-				orderId: order._id.toString(),
-			},
-		);
+		// Send WhatsApp to customer
+		const whatsappMessage = `Hi ${customer.fullName}! 
+
+Your custom order has been created by ${cook.storeName}!
+
+Order Details:
+• Order: ${title}
+• Food Amount: ₦${amount.toFixed(2)}
+${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}` : ""}
+• Total: ₦${totalAmount.toFixed(2)}
+• Ready: ${new Date(readyDate).toLocaleDateString()}
+• Time: ${readyTime || "12:00"}
+
+Pay here: ${order.paymentLink}
+
+Thank you for choosing ${cook.storeName}!`;
+
+		const whatsappUrl = `https://wa.me/${customer.phoneNumber}?text=${encodeURIComponent(whatsappMessage)}`;
 
 		res.status(201).json({
 			success: true,
@@ -1413,15 +1216,333 @@ export const createCustomOrder = async (req, res) => {
 				id: order._id,
 				title: order.customOrderTitle,
 				customerName: order.customerName,
+				customerPhone: order.customerPhone,
+				subtotal: order.subtotal,
+				deliveryFee: order.deliveryFee,
+				serviceFee: order.serviceFee,
+				paystackFee: order.paystackFee,
 				totalAmount: order.totalAmount,
+				feesAddedToCustomer: order.feesAddedToCustomer,
 				status: order.status,
 				paymentLink: order.paymentLink,
 				readyDate: order.readyDate,
 				deliveryType: order.deliveryType,
+				whatsappUrl: whatsappUrl,
 			},
 		});
 	} catch (error) {
 		console.error("Create custom order error:", error);
 		res.status(500).json({ message: error.message });
+	}
+};
+// controllers/orderController.js - Fixed createOrderFromCart
+
+export const createOrderFromCart = async (req, res) => {
+	try {
+		const {
+			sessionId,
+			customerName,
+			customerPhone,
+			customerEmail,
+			customerNote,
+			deliveryType,
+			deliveryAddress,
+			readyDate,
+		} = req.body;
+
+		// Validate required fields
+		if (
+			!sessionId ||
+			!customerName ||
+			!customerPhone ||
+			!deliveryType ||
+			!readyDate
+		) {
+			return res.status(400).json({
+				message:
+					"Session ID, customer name, phone, delivery type, and ready date are required",
+			});
+		}
+
+		// Validate phone number
+		const phoneRegex = /^[0-9]{11}$/;
+		if (!phoneRegex.test(customerPhone.replace(/\D/g, ""))) {
+			return res.status(400).json({
+				message: "Please enter a valid 11-digit phone number",
+			});
+		}
+
+		// Get cart
+		const cart = await Cart.findOne({ sessionId });
+		if (!cart || cart.items.length === 0) {
+			return res.status(400).json({ message: "Cart is empty" });
+		}
+
+		// Get cook ID from first item
+		const firstProduct = await Meal.findById(cart.items[0].productId);
+		if (!firstProduct) {
+			return res.status(404).json({ message: "Product not found" });
+		}
+		const cookId = firstProduct.cookId;
+
+		// Check if cook exists and is available
+		const cook = await CookProfile.findOne({ userId: cookId });
+		if (!cook) {
+			return res.status(404).json({ message: "Cook not found" });
+		}
+		if (!cook.isAvailable) {
+			return res.status(400).json({ message: "Store is currently paused" });
+		}
+		if (!cook.isApproved) {
+			return res.status(400).json({ message: "Store is pending approval" });
+		}
+
+		// ✅ Check if cook has fees enabled
+		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false; // Default: true
+
+		// Validate ready date
+		const readyDateTime = new Date(readyDate);
+		if (readyDateTime < new Date()) {
+			return res
+				.status(400)
+				.json({ message: "Ready date must be in the future" });
+		}
+
+		// Validate delivery address ONLY if delivery type is delivery
+		if (deliveryType === "delivery" && !deliveryAddress) {
+			return res.status(400).json({
+				message: "Delivery address is required for delivery orders",
+			});
+		}
+
+		// Check if customer exists, if not create them
+		let customer = await Customer.findOne({
+			cookId,
+			phoneNumber: customerPhone.replace(/\D/g, ""),
+		});
+
+		if (!customer) {
+			customer = await Customer.create({
+				cookId,
+				fullName: customerName,
+				phoneNumber: customerPhone.replace(/\D/g, ""),
+				email: customerEmail || "",
+				isActive: true,
+			});
+		}
+
+		// Build order items from cart
+		const orderItems = [];
+		let foodSubtotal = 0; // ✅ Renamed for clarity
+
+		for (const cartItem of cart.items) {
+			const product = await Meal.findById(cartItem.productId);
+			if (!product) {
+				return res.status(404).json({
+					message: `Product not found: ${cartItem.productId}`,
+				});
+			}
+
+			if (!product.isAvailable) {
+				return res.status(400).json({
+					message: `${product.name} is currently unavailable`,
+				});
+			}
+
+			// Use product price
+			const itemPrice = product.price;
+			let itemSubtotal = itemPrice * cartItem.quantity;
+
+			// Process add-ons
+			const addOns = [];
+			let addOnTotal = 0;
+
+			if (cartItem.addOns && cartItem.addOns.length) {
+				for (const addOn of cartItem.addOns) {
+					let productAddOn = product.addOns.find(
+						(a) => a.name.toLowerCase() === addOn.name.toLowerCase(),
+					);
+
+					if (productAddOn) {
+						const addOnPrice = productAddOn.price;
+						const addOnSubtotal = addOnPrice * cartItem.quantity;
+						addOnTotal += addOnSubtotal;
+						addOns.push({
+							name: productAddOn.name,
+							price: addOnPrice,
+						});
+					} else if (addOn.name && addOn.price) {
+						const addOnSubtotal = addOn.price * cartItem.quantity;
+						addOnTotal += addOnSubtotal;
+						addOns.push({
+							name: addOn.name,
+							price: addOn.price,
+						});
+					}
+				}
+			}
+
+			const totalItemSubtotal = itemSubtotal + addOnTotal;
+			foodSubtotal += totalItemSubtotal;
+
+			orderItems.push({
+				productId: product._id,
+				name: product.name,
+				quantity: cartItem.quantity,
+				price: itemPrice,
+				addOns,
+				subtotal: totalItemSubtotal,
+			});
+		}
+
+		// ✅ Delivery fee - cook's own delivery fee (no platform fee on this)
+		const deliveryFee = deliveryType === "delivery" ? cook.deliveryFee || 0 : 0;
+
+		// ✅ Calculate fees ONLY on food subtotal (NOT on delivery fee)
+		let serviceFee = 0;
+		let paystackFee = 0;
+		let totalAmount = 0;
+
+		if (addFeesToCustomer) {
+			// ✅ Fees added to customer price (only on food)
+			serviceFee = foodSubtotal * 0.05; // 5% platform fee on food only
+			paystackFee = (foodSubtotal + serviceFee) * 0.015 + 1; // Paystack fee on food only
+			totalAmount =
+				Math.round(
+					(foodSubtotal + serviceFee + paystackFee + deliveryFee) * 100,
+				) / 100;
+		} else {
+			// ✅ Fees NOT added to customer - cook absorbs fees
+			totalAmount = Math.round((foodSubtotal + deliveryFee) * 100) / 100;
+			// Fees calculated for payout deduction (on food only)
+			serviceFee = foodSubtotal * 0.05;
+			paystackFee = (foodSubtotal + serviceFee) * 0.015 + 1;
+		}
+
+		console.log("💰 Order Calculation:", {
+			foodSubtotal: foodSubtotal,
+			deliveryFee: deliveryFee,
+			serviceFee: serviceFee,
+			paystackFee: paystackFee,
+			addFeesToCustomer: addFeesToCustomer,
+			totalAmount: totalAmount,
+		});
+
+		// Create order
+		const orderData = {
+			cookId,
+			customerId: customer._id,
+			customerName,
+			customerPhone: customerPhone.replace(/\D/g, ""),
+			customerEmail: customerEmail || "",
+			customerNote: customerNote || "",
+			deliveryType,
+			deliveryAddress: deliveryType === "delivery" ? deliveryAddress : null,
+			deliveryFee: deliveryFee,
+			readyDate: readyDateTime,
+			readyTime: "12:00",
+			status: "pending",
+			paymentStatus: "pending",
+			orderType: "product_order",
+			items: orderItems,
+			subtotal: Math.round(foodSubtotal * 100) / 100,
+			serviceFee: Math.round(serviceFee * 100) / 100,
+			paystackFee: Math.round(paystackFee * 100) / 100,
+			totalAmount: totalAmount,
+			feesAddedToCustomer: addFeesToCustomer,
+			pickupWindow: {
+				from: cook.pickupWindow.from,
+				to: cook.pickupWindow.to,
+			},
+			sessionId: sessionId,
+		};
+
+		const order = await Order.create(orderData);
+
+		// Update customer stats
+		await Customer.findByIdAndUpdate(customer._id, {
+			$inc: { ordersCount: 1, totalSpent: totalAmount },
+			$set: { lastOrderDate: new Date() },
+		});
+
+		// Clear cart
+		await Cart.findOneAndDelete({ sessionId });
+
+		// Generate payment link
+		const paymentReference =
+			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+		order.paymentReference = paymentReference;
+
+		const paystackResponse = await axios.post(
+			"https://api.paystack.co/transaction/initialize",
+			{
+				email: customerEmail || `${customerPhone}@getameal.com`,
+				amount: Math.round(totalAmount * 100),
+				reference: paymentReference,
+				callback_url: `${process.env.API_URL}/customer/payment/callback`,
+				metadata: {
+					orderId: order._id.toString(),
+					cookId: cookId.toString(),
+					customerName,
+					customerPhone: customerPhone.replace(/\D/g, ""),
+					sessionId: sessionId,
+				},
+			},
+			{
+				headers: {
+					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+				},
+			},
+		);
+
+		order.paymentLink = paystackResponse.data.data.authorization_url;
+		await order.save();
+
+		// Send push notification to cook
+		await sendPushToUser(
+			cookId,
+			"New Order Received 🆕",
+			`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
+			{
+				type: "new_order",
+				orderId: order._id.toString(),
+			},
+		);
+
+		res.status(201).json({
+			success: true,
+			message:
+				"Order created successfully. Complete payment to confirm your order.",
+			order: {
+				id: order._id,
+				customerName: order.customerName,
+				customerPhone: order.customerPhone,
+				deliveryType: order.deliveryType,
+				deliveryAddress: order.deliveryAddress || null,
+				deliveryFee: order.deliveryFee,
+				readyDate: order.readyDate,
+				subtotal: order.subtotal,
+				serviceFee: order.serviceFee,
+				paystackFee: order.paystackFee,
+				totalAmount: order.totalAmount,
+				feesAddedToCustomer: order.feesAddedToCustomer,
+				status: order.status,
+				paymentStatus: order.paymentStatus,
+				paymentLink: order.paymentLink,
+				items: order.items.map((item) => ({
+					name: item.name,
+					quantity: item.quantity,
+					price: item.price,
+					addOns: item.addOns,
+					subtotal: item.subtotal,
+				})),
+			},
+		});
+	} catch (error) {
+		console.error("Create order from cart error:", error);
+		res.status(500).json({
+			message: "Failed to create order",
+			error: error.message,
+		});
 	}
 };

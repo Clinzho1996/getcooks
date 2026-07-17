@@ -64,6 +64,14 @@ const cookProfileSchema = new mongoose.Schema(
 
 		rating: { type: Number, default: 0 },
 		reviewsCount: { type: Number, default: 0 },
+		fees: {
+			// Whether to add fees to customer price (default: true)
+			addFeesToCustomer: {
+				type: Boolean,
+				default: true,
+			},
+		},
+
 		ordersCount: { type: Number, default: 0 },
 		walletBalance: { type: Number, default: 0 },
 		viewsThisWeek: { type: Number, default: 0 },
