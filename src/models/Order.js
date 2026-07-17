@@ -46,6 +46,8 @@ const orderSchema = new mongoose.Schema(
 			required: true,
 		},
 		deliveryFee: { type: Number, default: 0 },
+
+		deliveryAddress: { type: String, required: true },
 		pickupWindow: {
 			from: String,
 			to: String,

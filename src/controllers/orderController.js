@@ -166,6 +166,8 @@ export const createCustomerOrder = async (req, res) => {
 // ============================================
 // GET CUSTOMER ORDER DETAILS (Public)
 // ============================================
+// controllers/orderController.js - Updated getCustomerOrderDetails
+
 export const getCustomerOrderDetails = async (req, res) => {
 	try {
 		const { orderId } = req.params;
@@ -179,8 +181,9 @@ export const getCustomerOrderDetails = async (req, res) => {
 			_id: orderId,
 			customerPhone: phone.replace(/\D/g, ""),
 		})
-			.populate("cookId", "fullName email phone")
-			.populate("items.productId", "name images");
+			.populate("cookId", "fullName email phone profileImage")
+			.populate("customerId", "fullName phoneNumber email")
+			.populate("items.productId", "name images description");
 
 		if (!order) {
 			return res.status(404).json({ message: "Order not found" });
@@ -192,38 +195,81 @@ export const getCustomerOrderDetails = async (req, res) => {
 			success: true,
 			order: {
 				id: order._id,
-				items: order.items,
-				customOrderTitle: order.customOrderTitle,
-				customOrderDescription: order.customOrderDescription,
+
+				// ✅ Customer Details
+				customer: {
+					id: order.customerId?._id || null,
+					fullName: order.customerName,
+					phone: order.customerPhone,
+					email: order.customerEmail || null,
+					note: order.customerNote || null,
+				},
+
+				// ✅ Order Items
+				items: order.items.map((item) => ({
+					id: item._id,
+					productId: item.productId?._id || null,
+					name: item.name,
+					quantity: item.quantity,
+					price: item.price,
+					addOns: item.addOns || [],
+					subtotal: item.subtotal,
+					productImage: item.productId?.images?.[0]?.url || null,
+				})),
+
+				// ✅ Custom Order Details
+				customOrderTitle: order.customOrderTitle || null,
+				customOrderDescription: order.customOrderDescription || null,
+
+				// ✅ Delivery Details
+				deliveryType: order.deliveryType,
+				deliveryAddress: order.deliveryAddress || null,
+				deliveryFee: order.deliveryFee || 0,
+				pickupWindow: order.pickupWindow || null,
+
+				// ✅ Timing
+				readyDate: order.readyDate,
+				readyTime: order.readyTime || "12:00",
+				createdAt: order.createdAt,
+
+				// ✅ Financials
+				subtotal: order.subtotal,
+				serviceFee: order.serviceFee,
 				totalAmount: order.totalAmount,
+
+				// ✅ Status
 				status: order.status,
 				paymentStatus: order.paymentStatus,
-				deliveryType: order.deliveryType,
-				readyDate: order.readyDate,
-				readyTime: order.readyTime,
-				pickupWindow: order.pickupWindow,
-				deliveryFee: order.deliveryFee,
-				createdAt: order.createdAt,
-				customerNote: order.customerNote,
-				sellerNote: order.sellerNote,
+
+				// ✅ Notes
+				customerNote: order.customerNote || null,
+				sellerNote: order.sellerNote || null,
+
+				// ✅ Cook Details
 				cook: {
 					id: order.cookId._id,
 					fullName: order.cookId.fullName,
 					email: order.cookId.email,
 					phone: order.cookId.phone,
-					storeName: cookProfile?.storeName,
-					storeHandle: cookProfile?.storeHandle,
-					storeLink: cookProfile?.storeLink,
-					profileImage: cookProfile?.profileImage,
-					kitchenAddress: cookProfile?.kitchenAddress,
-					pickupLandmark: cookProfile?.pickupLandmark,
-					pickupWindow: cookProfile?.pickupWindow,
+					profileImage: order.cookId.profileImage || null,
+					storeName: cookProfile?.storeName || null,
+					storeHandle: cookProfile?.storeHandle || null,
+					storeLink: cookProfile?.storeLink || null,
+					profileImage: cookProfile?.profileImage || null,
+					kitchenAddress: cookProfile?.kitchenAddress || null,
+					pickupLandmark: cookProfile?.pickupLandmark || null,
+					pickupWindow: cookProfile?.pickupWindow || null,
+					rating: cookProfile?.rating || 0,
+					reviewsCount: cookProfile?.reviewsCount || 0,
 				},
 			},
 		});
 	} catch (error) {
 		console.error("Get customer order details error:", error);
-		res.status(500).json({ message: error.message });
+		res.status(500).json({
+			success: false,
+			message: error.message,
+		});
 	}
 };
 
