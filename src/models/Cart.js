@@ -1,4 +1,5 @@
-// models/Cart.js - Public Cart
+// models/Cart.js - Updated to work with sessionId
+
 import mongoose from "mongoose";
 
 const cartItemSchema = new mongoose.Schema({
@@ -22,6 +23,15 @@ const cartItemSchema = new mongoose.Schema({
 
 const cartSchema = new mongoose.Schema(
 	{
+		// ✅ Make user optional - for logged in users (future)
+		user: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: "User",
+			required: false,
+			index: true,
+			sparse: true,
+		},
+		// ✅ For guest users (no login)
 		sessionId: {
 			type: String,
 			required: true,
@@ -38,7 +48,11 @@ const cartSchema = new mongoose.Schema(
 	{ timestamps: true },
 );
 
-// Auto-expire old carts
+// ✅ Remove the unique constraint on user
+// cartSchema.index({ user: 1 }, { unique: true, sparse: true }); // ❌ Remove this
+
+// ✅ Keep these indexes
+cartSchema.index({ sessionId: 1 }, { unique: true });
 cartSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export default mongoose.model("Cart", cartSchema);

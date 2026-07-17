@@ -2,7 +2,8 @@
 import Cart from "../models/Cart.js";
 import Meal from "../models/Meal.js";
 
-// Add to cart
+// controllers/cartController.js - Updated addToCart
+
 export const addToCart = async (req, res) => {
 	try {
 		const { sessionId, productId, quantity = 1, addOns = [] } = req.body;
@@ -27,10 +28,15 @@ export const addToCart = async (req, res) => {
 				.json({ message: "Product is currently unavailable" });
 		}
 
-		// Find or create cart
+		// ✅ Find or create cart - ONLY by sessionId
 		let cart = await Cart.findOne({ sessionId });
+
 		if (!cart) {
-			cart = new Cart({ sessionId, items: [] });
+			cart = new Cart({
+				sessionId,
+				items: [],
+				// No user field needed for guest carts
+			});
 		}
 
 		// Check if product already in cart
@@ -48,7 +54,7 @@ export const addToCart = async (req, res) => {
 				productId,
 				name: product.name,
 				price: product.price,
-				customerPrice: product.customerPrice,
+				customerPrice: product.customerPrice || product.price,
 				quantity,
 				addOns,
 				image:
@@ -71,7 +77,16 @@ export const addToCart = async (req, res) => {
 			success: true,
 			message: "Item added to cart",
 			cart: {
-				items: cart.items,
+				items: cart.items.map((item) => ({
+					productId: item.productId,
+					name: item.name,
+					quantity: item.quantity,
+					price: item.price,
+					customerPrice: item.customerPrice,
+					addOns: item.addOns,
+					image: item.image,
+					subtotal: (item.customerPrice || item.price) * item.quantity,
+				})),
 				subtotal: cart.subtotal,
 				totalItems: cart.items.reduce((sum, item) => sum + item.quantity, 0),
 			},
