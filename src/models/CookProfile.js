@@ -88,6 +88,7 @@ const cookProfileSchema = new mongoose.Schema(
 			accountNumber: String,
 			accountName: String,
 			recipientCode: String,
+			subaccountCode: String,
 		},
 	},
 	{ timestamps: true },
