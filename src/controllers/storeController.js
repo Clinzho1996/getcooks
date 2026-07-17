@@ -2,7 +2,6 @@
 import CookProfile from "../models/CookProfile.js";
 import Meal from "../models/Meal.js";
 
-// Get store by handle
 export const getStoreByHandle = async (req, res) => {
 	try {
 		const { handle } = req.params;
@@ -62,6 +61,7 @@ export const getStoreByHandle = async (req, res) => {
 		// Get store info
 		const storeInfo = {
 			id: cook._id,
+			cookId: cook.userId._id, // ✅ Added cookId
 			storeName: cook.storeName,
 			storeHandle: cook.storeHandle,
 			storeLink: cook.storeLink,

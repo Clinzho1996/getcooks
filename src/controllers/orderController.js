@@ -3,7 +3,6 @@ import axios from "axios";
 import crypto from "crypto";
 import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
-import Meal from "../models/Meal.js";
 import Order from "../models/Order.js";
 import User from "../models/User.js";
 import WalletTransaction from "../models/WalletTransaction.js";
@@ -12,36 +11,36 @@ import { sendPushToUser } from "../services/pushService.js";
 // ============================================
 // CUSTOMER ORDER CREATION (Public - No Auth)
 // ============================================
-// controllers/orderController.js - Fixed createCustomerOrder
-
-// controllers/orderController.js - Fixed createCustomerOrder
 
 export const createCustomerOrder = async (req, res) => {
 	try {
 		const {
 			cookId,
-			items,
 			customerName,
 			customerPhone,
-			customerEmail,
 			customerNote,
 			deliveryType,
-			deliveryFee,
-			pickupWindow,
+			deliveryAddress,
 			readyDate,
-			readyTime,
-			customOrder,
+			foodRequest, // What they want to order
 		} = req.body;
 
 		// Validate required fields
-		if (!cookId || !customerName || !customerPhone || !deliveryType) {
+		if (
+			!cookId ||
+			!customerName ||
+			!customerPhone ||
+			!deliveryType ||
+			!readyDate ||
+			!foodRequest
+		) {
 			return res.status(400).json({
 				message:
-					"Cook ID, customer name, phone, and delivery type are required",
+					"Cook ID, customer name, phone, delivery type, ready date, and food request are required",
 			});
 		}
 
-		// Validate phone number
+		// Validate phone number (11 digits)
 		const phoneRegex = /^[0-9]{11}$/;
 		if (!phoneRegex.test(customerPhone.replace(/\D/g, ""))) {
 			return res.status(400).json({
@@ -62,9 +61,6 @@ export const createCustomerOrder = async (req, res) => {
 		}
 
 		// Validate ready date
-		if (!readyDate) {
-			return res.status(400).json({ message: "Ready date is required" });
-		}
 		const readyDateTime = new Date(readyDate);
 		if (readyDateTime < new Date()) {
 			return res
@@ -72,19 +68,12 @@ export const createCustomerOrder = async (req, res) => {
 				.json({ message: "Ready date must be in the future" });
 		}
 
-		let orderData = {
-			cookId,
-			customerName,
-			customerPhone: customerPhone.replace(/\D/g, ""),
-			customerEmail,
-			customerNote,
-			deliveryType,
-			deliveryFee: deliveryFee || 0,
-			readyDate: readyDateTime,
-			readyTime: readyTime || "12:00",
-			status: "pending",
-			paymentStatus: "pending",
-		};
+		// Validate delivery address if delivery type is delivery
+		if (deliveryType === "delivery" && !deliveryAddress) {
+			return res.status(400).json({
+				message: "Delivery address is required for delivery orders",
+			});
+		}
 
 		// Check if customer exists, if not create them
 		let customer = await Customer.findOne({
@@ -97,198 +86,72 @@ export const createCustomerOrder = async (req, res) => {
 				cookId,
 				fullName: customerName,
 				phoneNumber: customerPhone.replace(/\D/g, ""),
-				email: customerEmail || "",
 				isActive: true,
 			});
 		}
 
-		orderData.customerId = customer._id;
-
-		// Handle product order vs custom order
-		let subtotal = 0;
-
-		if (customOrder) {
-			// Custom order
-			orderData.orderType = "custom_order";
-			orderData.customOrderTitle = customOrder.title;
-			orderData.customOrderDescription = customOrder.description;
-
-			const serviceFee = customOrder.amount * 0.05;
-			const paystackFee = (customOrder.amount + serviceFee) * 0.015 + 1;
-
-			orderData.subtotal = customOrder.amount;
-			orderData.serviceFee = serviceFee + paystackFee;
-			orderData.totalAmount =
-				customOrder.amount + serviceFee + paystackFee + (deliveryFee || 0);
-		} else {
-			// Product order
-			if (!items || !items.length) {
-				return res.status(400).json({ message: "Order items are required" });
-			}
-
-			orderData.orderType = "product_order";
-			orderData.items = [];
-
-			for (const item of items) {
-				const product = await Meal.findById(item.productId);
-				if (!product) {
-					return res.status(404).json({
-						message: `Product not found: ${item.productId}`,
-					});
-				}
-
-				if (!product.isAvailable) {
-					return res.status(400).json({
-						message: `${product.name} is currently unavailable`,
-					});
-				}
-
-				// Use customerPrice (what customer actually pays)
-				const itemPrice = product.customerPrice || product.price;
-				let itemSubtotal = itemPrice * item.quantity;
-
-				// Process add-ons
-				const addOns = [];
-				if (item.addOns && item.addOns.length) {
-					for (const addOn of item.addOns) {
-						// ✅ MATCH BY NAME (most reliable since customer knows the add-on name)
-						let productAddOn = null;
-
-						// Try to find by name (case insensitive)
-						if (addOn.name) {
-							productAddOn = product.addOns.find(
-								(a) => a.name.toLowerCase() === addOn.name.toLowerCase(),
-							);
-						}
-
-						// If not found by name, try by id
-						if (!productAddOn && addOn.id) {
-							productAddOn = product.addOns.find(
-								(a) => a._id && a._id.toString() === addOn.id,
-							);
-						}
-
-						if (productAddOn) {
-							// Use the product's actual add-on price
-							const addOnPrice = productAddOn.price;
-							const addOnTotal = addOnPrice * item.quantity;
-							itemSubtotal += addOnTotal;
-
-							addOns.push({
-								name: productAddOn.name,
-								price: addOnPrice,
-							});
-						} else {
-							// If add-on not found in product, use the provided values
-							console.warn(
-								`Add-on not found in product: ${addOn.name || addOn.id}`,
-							);
-							if (addOn.name && addOn.price) {
-								const addOnTotal = addOn.price * item.quantity;
-								itemSubtotal += addOnTotal;
-								addOns.push({
-									name: addOn.name,
-									price: addOn.price,
-								});
-							}
-						}
-					}
-				}
-
-				subtotal += itemSubtotal;
-
-				orderData.items.push({
-					productId: product._id,
-					name: product.name,
-					quantity: item.quantity,
-					price: itemPrice,
-					addOns,
-					subtotal: itemSubtotal,
-				});
-			}
-
-			// Calculate fees
-			const serviceFee = subtotal * 0.05;
-			const paystackFee = (subtotal + serviceFee) * 0.015 + 1;
-
-			orderData.subtotal = subtotal;
-			orderData.serviceFee = serviceFee + paystackFee;
-			orderData.totalAmount =
-				subtotal + serviceFee + paystackFee + (deliveryFee || 0);
-		}
-
-		// Set pickup window
-		if (pickupWindow) {
-			orderData.pickupWindow = pickupWindow;
-		} else {
-			orderData.pickupWindow = {
+		// Create order data
+		const orderData = {
+			cookId,
+			customerId: customer._id,
+			customerName,
+			customerPhone: customerPhone.replace(/\D/g, ""),
+			customerNote: customerNote || "",
+			deliveryType,
+			deliveryAddress: deliveryType === "delivery" ? deliveryAddress : null,
+			deliveryFee: deliveryType === "delivery" ? cook.deliveryFee || 0 : 0,
+			readyDate: readyDateTime,
+			readyTime: "12:00",
+			status: "pending",
+			paymentStatus: "pending",
+			orderType: "custom_order",
+			customOrderTitle: foodRequest, // What the customer wants
+			customOrderDescription: customerNote || "",
+			// Amount will be set by the cook when they accept
+			subtotal: 0,
+			serviceFee: 0,
+			totalAmount: 0,
+			pickupWindow: {
 				from: cook.pickupWindow.from,
 				to: cook.pickupWindow.to,
-			};
-		}
+			},
+		};
 
 		// Create the order
 		const order = await Order.create(orderData);
 
 		// Update customer stats
 		await Customer.findByIdAndUpdate(customer._id, {
-			$inc: { ordersCount: 1, totalSpent: orderData.totalAmount },
+			$inc: { ordersCount: 1 },
 			$set: { lastOrderDate: new Date() },
 		});
-
-		// Generate payment link
-		const paymentReference =
-			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-		order.paymentReference = paymentReference;
-
-		// Initialize Paystack payment
-		const paystackResponse = await axios.post(
-			"https://api.paystack.co/transaction/initialize",
-			{
-				email: customerEmail || `${customerPhone}@getameal.com`,
-				amount: Math.round(orderData.totalAmount * 100),
-				reference: paymentReference,
-				callback_url: `${process.env.API_URL}/customer/payment/callback`,
-				metadata: {
-					orderId: order._id.toString(),
-					cookId: cookId.toString(),
-					customerName,
-					customerPhone: customerPhone.replace(/\D/g, ""),
-				},
-			},
-			{
-				headers: {
-					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
-				},
-			},
-		);
-
-		order.paymentLink = paystackResponse.data.data.authorization_url;
-		await order.save();
 
 		// Send push notification to cook
 		await sendPushToUser(
 			cookId,
-			"New Order Received 🆕",
-			`${customerName} placed a new order for ₦${orderData.totalAmount.toFixed(2)}`,
+			"New Food Request 🍽️",
+			`${customerName} wants: ${foodRequest}`,
 			{
-				type: "new_order",
+				type: "new_order_request",
 				orderId: order._id.toString(),
+				customerName,
+				foodRequest,
 			},
 		);
 
 		res.status(201).json({
 			success: true,
-			message: "Order created successfully",
+			message: "Food request sent to cook successfully",
 			order: {
 				id: order._id,
 				customerName: order.customerName,
-				totalAmount: order.totalAmount,
+				customerPhone: order.customerPhone,
+				foodRequest: order.customOrderTitle,
+				deliveryType: order.deliveryType,
+				deliveryAddress: order.deliveryAddress || null,
+				readyDate: order.readyDate,
 				status: order.status,
 				paymentStatus: order.paymentStatus,
-				paymentLink: order.paymentLink,
-				readyDate: order.readyDate,
-				deliveryType: order.deliveryType,
 			},
 		});
 	} catch (error) {
@@ -909,11 +772,20 @@ export const getOrderRequests = async (req, res) => {
 	}
 };
 
-// Accept order request
+// controllers/orderController.js - ONE SIMPLE ENDPOINT
+
 export const acceptOrderRequest = async (req, res) => {
 	try {
 		const userId = req.user._id;
 		const { requestId } = req.params;
+		const { amount } = req.body;
+
+		// Amount is required - cook sets the price
+		if (!amount || amount <= 0) {
+			return res.status(400).json({
+				message: "Please set a price for this order",
+			});
+		}
 
 		const order = await Order.findOne({
 			_id: requestId,
@@ -925,31 +797,91 @@ export const acceptOrderRequest = async (req, res) => {
 			return res.status(404).json({ message: "Order request not found" });
 		}
 
+		const cook = await CookProfile.findOne({ userId });
+		if (!cook) {
+			return res.status(404).json({ message: "Cook profile not found" });
+		}
+
+		// Calculate fees
+		const serviceFee = amount * 0.05;
+		const paystackFee = (amount + serviceFee) * 0.015 + 1;
+		const totalAmount =
+			Math.round(
+				(amount + serviceFee + paystackFee + (order.deliveryFee || 0)) * 100,
+			) / 100;
+
+		// Update order with price
+		order.subtotal = amount;
+		order.serviceFee = Math.round((serviceFee + paystackFee) * 100) / 100;
+		order.totalAmount = totalAmount;
 		order.status = "confirmed";
+		order.paymentStatus = "pending";
 		await order.save();
 
-		await sendPushToUser(
-			userId,
-			"Order Request Accepted ✅",
-			`You accepted a custom order from ${order.customerName}`,
+		// Generate payment link
+		const paymentReference =
+			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+		order.paymentReference = paymentReference;
+
+		const paystackResponse = await axios.post(
+			"https://api.paystack.co/transaction/initialize",
 			{
-				type: "order_accepted",
-				orderId: order._id.toString(),
+				email: order.customerEmail || `${order.customerPhone}@getameal.com`,
+				amount: Math.round(totalAmount * 100),
+				reference: paymentReference,
+				callback_url: `${process.env.API_URL}/customer/payment/callback`,
+				metadata: {
+					orderId: order._id.toString(),
+					cookId: userId.toString(),
+					customerName: order.customerName,
+					customerPhone: order.customerPhone,
+				},
+			},
+			{
+				headers: {
+					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+				},
 			},
 		);
 
+		order.paymentLink = paystackResponse.data.data.authorization_url;
+		await order.save();
+
+		// Send WhatsApp with payment link
+		const whatsappMessage = `Hi ${order.customerName}! 
+
+Your order has been accepted by ${cook.storeName}!
+
+Order: ${order.customOrderTitle || order.customerNote}
+Amount: ₦${totalAmount.toFixed(2)}
+Ready: ${new Date(order.readyDate).toLocaleDateString()}
+
+Pay here: ${order.paymentLink}
+
+Thank you for choosing ${cook.storeName}!`;
+
+		const whatsappUrl = `https://wa.me/${order.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+
 		res.json({
 			success: true,
-			message: "Order request accepted",
-			order,
+			message: "Order accepted",
+			order: {
+				id: order._id,
+				customerName: order.customerName,
+				customerPhone: order.customerPhone,
+				totalAmount: order.totalAmount,
+				paymentLink: order.paymentLink,
+				status: order.status,
+				whatsappUrl: whatsappUrl,
+			},
 		});
 	} catch (error) {
-		console.error("Accept order request error:", error);
+		console.error("Accept order error:", error);
 		res.status(500).json({ message: error.message });
 	}
 };
 
-// Decline order request
+// Decline order request - WITH reason (optional)
 export const declineOrderRequest = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -966,10 +898,31 @@ export const declineOrderRequest = async (req, res) => {
 			return res.status(404).json({ message: "Order request not found" });
 		}
 
+		// Get cook profile
+		const cook = await CookProfile.findOne({ userId });
+		if (!cook) {
+			return res.status(404).json({ message: "Cook profile not found" });
+		}
+
 		order.status = "cancelled";
 		order.sellerNote = reason || "Order request declined";
 		await order.save();
 
+		// Send WhatsApp message to customer
+		const declineReason = reason || "Unable to fulfill your order at this time";
+		const whatsappMessage = `Hi ${order.customerName}! 
+
+Your food request has been declined by ${cook.storeName}.
+
+Reason: ${declineReason}
+
+We apologize for any inconvenience. Please feel free to try another cook.
+
+Thank you for choosing GetAMeal!`;
+
+		const whatsappUrl = `https://wa.me/${order.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+
+		// Send push notification to cook
 		await sendPushToUser(
 			userId,
 			"Order Request Declined ❌",
@@ -984,6 +937,7 @@ export const declineOrderRequest = async (req, res) => {
 			success: true,
 			message: "Order request declined",
 			order,
+			whatsappUrl: whatsappUrl,
 		});
 	} catch (error) {
 		console.error("Decline order request error:", error);

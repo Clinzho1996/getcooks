@@ -1,7 +1,8 @@
+// routes/reviewRoutes.js
 import express from "express";
-
 import {
 	createReview,
+	deleteReview,
 	getCookReviews,
 	getMealReviews,
 	updateReview,
@@ -9,12 +10,13 @@ import {
 
 const router = express.Router();
 
-router.post("/", createReview);
-
-router.put("/:id", updateReview);
-
+// ===== PUBLIC ROUTES (No Auth) =====
+router.get("/cook/:cookId", getCookReviews);
 router.get("/meal/:mealId", getMealReviews);
 
-router.get("/cook/:cookId", getCookReviews);
+// ===== AUTHENTICATED ROUTES =====
+router.post("/", createReview);
+router.put("/:id", updateReview);
+router.delete("/:id", deleteReview);
 
 export default router;
