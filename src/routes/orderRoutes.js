@@ -4,6 +4,7 @@ import {
 	acceptOrderRequest,
 	createCustomOrder,
 	createCustomerOrder,
+	createOrderFromCart,
 	declineOrderRequest,
 	getCookOrders,
 	getCustomerOrderDetails,
@@ -22,6 +23,7 @@ router.post("/customer", createCustomerOrder);
 router.get("/customer/:orderId", getCustomerOrderDetails);
 
 // ✅ Payment routes - Public (No Auth)
+router.post("/", createOrderFromCart);
 router.post("/payment/callback", handlePaymentCallback); // Changed to POST for Paystack webhook
 router.get("/payment/redirect", paymentRedirect); // For redirect after payment
 

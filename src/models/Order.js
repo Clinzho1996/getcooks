@@ -47,7 +47,7 @@ const orderSchema = new mongoose.Schema(
 		},
 		deliveryFee: { type: Number, default: 0 },
 
-		deliveryAddress: { type: String, required: true },
+		deliveryAddress: { type: String, default: null },
 		pickupWindow: {
 			from: String,
 			to: String,
@@ -72,6 +72,11 @@ const orderSchema = new mongoose.Schema(
 		},
 		paymentReference: String,
 		paymentLink: String,
+		sessionId: {
+			type: String,
+			default: null,
+			index: true,
+		},
 
 		status: {
 			type: String,
