@@ -1,4 +1,5 @@
-// models/Meal.js - Updated for cook-centric products
+// models/Meal.js - Updated with proper unit types
+
 import mongoose from "mongoose";
 
 const mealSchema = new mongoose.Schema(
@@ -14,11 +15,10 @@ const mealSchema = new mongoose.Schema(
 		category: { type: String, required: true },
 		whatsIncluded: { type: String, required: true },
 
-		// Pricing
+		// Pricing - ✅ Fixed unit types
 		unitType: {
 			type: String,
 			enum: [
-				"per_litre",
 				"per_plate",
 				"per_pack",
 				"per_bowl",
@@ -28,10 +28,23 @@ const mealSchema = new mongoose.Schema(
 				"per_bottle",
 				"per_portion",
 				"per_cup",
+				"per_litre",
+				"per_kg",
 			],
 			required: true,
 		},
-		price: { type: Number, required: true }, // Base price
+		// Display name for the unit (e.g., "Plate", "Pack", "Bowl")
+		unitDisplayName: {
+			type: String,
+			required: true,
+		},
+		// Number of units (e.g., 1 plate, 2 packs)
+		unitCount: {
+			type: Number,
+			default: 1,
+			min: 1,
+		},
+		price: { type: Number, required: true }, // Base price per unit
 		customerPrice: { type: Number, required: true }, // Price + fees
 
 		// Add-ons

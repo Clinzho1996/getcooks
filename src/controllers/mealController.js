@@ -893,6 +893,7 @@ export const createProduct = async (req, res) => {
 			category,
 			whatsIncluded,
 			unitType,
+			unitCount,
 			price,
 			addOns,
 			isAlwaysAvailable,
@@ -927,7 +928,7 @@ export const createProduct = async (req, res) => {
 			}
 		}
 
-		// ✅ FIX: Parse price to number first
+		// Parse price to number
 		const parsedPrice = parseFloat(price);
 		if (isNaN(parsedPrice) || parsedPrice <= 0) {
 			return res.status(400).json({
@@ -935,10 +936,28 @@ export const createProduct = async (req, res) => {
 			});
 		}
 
-		// Calculate customer price correctly
+		// ✅ Get unit display name based on unitType
+		const unitDisplayNames = {
+			per_plate: "Plate",
+			per_pack: "Pack",
+			per_bowl: "Bowl",
+			per_tray: "Tray",
+			per_piece: "Piece",
+			per_dozen: "Dozen",
+			per_bottle: "Bottle",
+			per_portion: "Portion",
+			per_cup: "Cup",
+			per_litre: "Litre",
+			per_kg: "Kg",
+		};
+
+		const unitDisplayName =
+			unitDisplayNames[unitType] || unitType.replace("per_", "");
+
+		// Calculate customer price
 		const platformFee = parsedPrice * 0.05;
 		const subtotal = parsedPrice + platformFee;
-		const paystackFee = subtotal * 0.015 + 1; // 1 naira (100 kobo)
+		const paystackFee = subtotal * 0.015 + 1;
 		const customerPrice = parseFloat((subtotal + paystackFee).toFixed(2));
 
 		// Parse add-ons
@@ -953,7 +972,6 @@ export const createProduct = async (req, res) => {
 					parsedAddOns = [addOns];
 				}
 			} catch (e) {
-				// Try cleaning string with single quotes
 				try {
 					const cleaned = addOns.replace(/'/g, '"');
 					parsedAddOns = JSON.parse(cleaned);
@@ -986,12 +1004,17 @@ export const createProduct = async (req, res) => {
 			isAlwaysAvailable === true ||
 			isAlwaysAvailable === "1";
 
+		// ✅ Parse unitCount (default to 1 if not provided)
+		const parsedUnitCount = parseInt(unitCount) || 1;
+
 		const product = await Meal.create({
 			cookId: userId,
 			name,
 			category,
 			whatsIncluded,
 			unitType,
+			unitDisplayName,
+			unitCount: parsedUnitCount,
 			price: parsedPrice,
 			customerPrice,
 			addOns: parsedAddOns,
@@ -1010,6 +1033,8 @@ export const createProduct = async (req, res) => {
 				category: product.category,
 				whatsIncluded: product.whatsIncluded,
 				unitType: product.unitType,
+				unitDisplayName: product.unitDisplayName,
+				unitCount: product.unitCount,
 				price: product.price,
 				customerPrice: product.customerPrice,
 				addOns: product.addOns,
@@ -1050,6 +1075,8 @@ export const getCookProducts = async (req, res) => {
 // Update product
 // controllers/mealController.js - Fixed updateProduct
 
+// controllers/mealController.js - Updated updateProduct
+
 export const updateProduct = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -1083,7 +1110,6 @@ export const updateProduct = async (req, res) => {
 
 		// If price changes, recalculate customer price
 		if (updates.price) {
-			// ✅ FIX: Parse price to number
 			const parsedPrice = parseFloat(updates.price);
 			if (isNaN(parsedPrice) || parsedPrice <= 0) {
 				return res.status(400).json({
@@ -1098,11 +1124,44 @@ export const updateProduct = async (req, res) => {
 			updates.price = parsedPrice;
 		}
 
+		// ✅ If unitType changes, update display name
+		if (updates.unitType) {
+			const unitDisplayNames = {
+				per_plate: "Plate",
+				per_pack: "Pack",
+				per_bowl: "Bowl",
+				per_tray: "Tray",
+				per_piece: "Piece",
+				per_dozen: "Dozen",
+				per_bottle: "Bottle",
+				per_portion: "Portion",
+				per_cup: "Cup",
+				per_litre: "Litre",
+				per_kg: "Kg",
+			};
+			updates.unitDisplayName =
+				unitDisplayNames[updates.unitType] ||
+				updates.unitType.replace("per_", "");
+		}
+
+		// ✅ Parse unitCount
+		if (updates.unitCount !== undefined) {
+			const parsedUnitCount = parseInt(updates.unitCount);
+			if (isNaN(parsedUnitCount) || parsedUnitCount < 1) {
+				return res.status(400).json({
+					message: "Unit count must be a positive number",
+				});
+			}
+			updates.unitCount = parsedUnitCount;
+		}
+
 		// Parse add-ons if provided
 		if (updates.addOns) {
 			try {
 				if (typeof updates.addOns === "string") {
 					updates.addOns = JSON.parse(updates.addOns);
+				} else if (Array.isArray(updates.addOns)) {
+					updates.addOns = updates.addOns;
 				}
 			} catch (e) {
 				try {
