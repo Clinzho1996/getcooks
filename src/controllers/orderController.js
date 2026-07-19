@@ -281,7 +281,7 @@ export const getCustomerOrderDetails = async (req, res) => {
 export const paymentRedirect = async (req, res) => {
 	try {
 		const { orderId, reference, status } = req.query;
-		const redirectUrl = `getameal://payment-status?orderId=${orderId}&reference=${reference}&status=${status || "success"}`;
+		const redirectUrl = `https://getameal-client.vercel.app/order-confirmed?orderId=${orderId}&reference=${reference}&status=${status || "success"}`;
 		return res.redirect(redirectUrl);
 	} catch (error) {
 		console.error("Redirect error:", error);
@@ -374,7 +374,7 @@ export const handlePaymentCallback = async (req, res) => {
 			}
 
 			return res.redirect(
-				`getameal://payment-status?orderId=${order._id}&status=success&message=Already+processed`,
+				`https://getameal-client.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Already+processed`,
 			);
 		}
 
@@ -403,7 +403,7 @@ export const handlePaymentCallback = async (req, res) => {
 			}
 
 			return res.redirect(
-				`getameal://payment-status?orderId=${order._id}&status=failed&message=Amount+mismatch`,
+				`https://getameal-client.vercel.app/order-confirmed?orderId=${order._id}&status=failed&message=Amount+mismatch`,
 			);
 		}
 
@@ -448,7 +448,7 @@ export const handlePaymentCallback = async (req, res) => {
 		}
 
 		return res.redirect(
-			`getameal://payment-status?orderId=${order._id}&status=success&message=Payment+verified`,
+			`https://getameal-client.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Payment+verified`,
 		);
 	} catch (error) {
 		console.error(
@@ -464,7 +464,7 @@ export const handlePaymentCallback = async (req, res) => {
 		}
 
 		return res.redirect(
-			`getameal://payment-status?status=failed&message=${encodeURIComponent(error.message)}`,
+			`https://getameal-client.vercel.app/order-confirmed?status=failed&message=${encodeURIComponent(error.message)}`,
 		);
 	}
 };
