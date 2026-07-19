@@ -308,6 +308,12 @@ export const getCookProfile = async (req, res) => {
 // ============================================
 // controllers/cookController.js - Updated updateCookProfile with fees toggle
 
+// controllers/cookController.js - Updated updateCookProfile with storeHandle
+
+// controllers/cookController.js - Fixed updateCookProfile with storeLink update
+
+// controllers/cookController.js - Fixed updateCookProfile
+
 export const updateCookProfile = async (req, res) => {
 	try {
 		const userId = req.user.id;
@@ -336,6 +342,8 @@ export const updateCookProfile = async (req, res) => {
 		const cookFields = [
 			// Store info
 			"storeName",
+			"storeHandle",
+			"storeLink", // ✅ ADD storeLink to cookFields
 			"storeDescription",
 			// Personal
 			"firstName",
@@ -367,9 +375,42 @@ export const updateCookProfile = async (req, res) => {
 			"availablePickup",
 			"schedule",
 			"isAvailable",
-			// ✅ Fee settings
+			// Fee settings
 			"fees",
 		];
+
+		// ✅ If storeHandle is being updated, check availability and update storeLink
+		if (updates.storeHandle) {
+			const normalizedHandle = updates.storeHandle.toLowerCase().trim();
+
+			// Validate handle format
+			const handleRegex = /^[a-zA-Z0-9-]+$/;
+			if (!handleRegex.test(normalizedHandle)) {
+				return res.status(400).json({
+					message:
+						"Store handle can only contain letters, numbers, and hyphens",
+				});
+			}
+
+			// Check if handle is already taken by another cook
+			const existingStore = await CookProfile.findOne({
+				storeHandle: normalizedHandle,
+				_id: { $ne: cookProfile._id },
+			});
+
+			if (existingStore) {
+				return res.status(409).json({
+					message: "Store handle is already taken. Please choose another one.",
+					field: "storeHandle",
+				});
+			}
+
+			// ✅ Update storeHandle
+			updates.storeHandle = normalizedHandle;
+
+			// ✅ Update storeLink
+			updates.storeLink = `https://getameal-client.vercel.app/${normalizedHandle}`;
+		}
 
 		// Update User model (only if provided)
 		userFields.forEach((field) => {
@@ -390,10 +431,10 @@ export const updateCookProfile = async (req, res) => {
 		if (updates.phone) user.phone = updates.phone;
 		if (updates.bio) user.bio = updates.bio;
 
-		// Update CookProfile model
+		// ✅ Update CookProfile model - storeLink is now included
 		cookFields.forEach((field) => {
 			if (updates[field] !== undefined) {
-				// ✅ Handle fees object specially (merge instead of replace)
+				// Handle fees object specially (merge instead of replace)
 				if (field === "fees" && typeof updates[field] === "object") {
 					cookProfile.fees = {
 						...cookProfile.fees,
@@ -439,7 +480,7 @@ export const updateCookProfile = async (req, res) => {
 			cookProfile.kitchenPhotos = updates.kitchenPhotos;
 		}
 
-		// Save both models
+		// ✅ Save both models
 		await user.save();
 		await cookProfile.save();
 
@@ -1517,3 +1558,5 @@ export const updateOrderStatus = async (req, res) => {
 		res.status(500).json({ message: error.message });
 	}
 };
+
+// controllers/cookController.js - Updated updateCookProfile with storeHandle
