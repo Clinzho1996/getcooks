@@ -1,4 +1,4 @@
-// models/CookProfile.js - Fixed
+// models/CookProfile.js - Add pickupEnabled
 
 import mongoose from "mongoose";
 
@@ -15,7 +15,7 @@ const cookProfileSchema = new mongoose.Schema(
 		storeHandle: {
 			type: String,
 			required: true,
-			unique: true, // ✅ Keep this, remove the schema.index() below
+			unique: true,
 			lowercase: true,
 		},
 		storeLink: { type: String, required: true },
@@ -44,6 +44,8 @@ const cookProfileSchema = new mongoose.Schema(
 			from: { type: String, required: true },
 			to: { type: String, required: true },
 		},
+		// ✅ Add pickupEnabled
+		pickupEnabled: { type: Boolean, default: true },
 		deliveryEnabled: { type: Boolean, default: false },
 		deliveryFee: { type: Number, default: 0 },
 		preparationDays: { type: Number, default: 1, min: 1 },
@@ -65,7 +67,6 @@ const cookProfileSchema = new mongoose.Schema(
 		rating: { type: Number, default: 0 },
 		reviewsCount: { type: Number, default: 0 },
 		fees: {
-			// Whether to add fees to customer price (default: true)
 			addFeesToCustomer: {
 				type: Boolean,
 				default: true,
@@ -94,11 +95,7 @@ const cookProfileSchema = new mongoose.Schema(
 	{ timestamps: true },
 );
 
-// ✅ Only keep ONE index declaration - remove the duplicate
-// Remove this line if you have unique: true above:
-// cookProfileSchema.index({ storeHandle: 1 }, { unique: true });
-
-// Keep this for geospatial queries
+// Geospatial index
 cookProfileSchema.index({ location: "2dsphere" });
 
 export default mongoose.model("CookProfile", cookProfileSchema);

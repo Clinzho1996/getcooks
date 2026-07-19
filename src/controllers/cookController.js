@@ -306,13 +306,6 @@ export const getCookProfile = async (req, res) => {
 // ============================================
 // UPDATE COOK PROFILE
 // ============================================
-// controllers/cookController.js - Updated updateCookProfile with fees toggle
-
-// controllers/cookController.js - Updated updateCookProfile with storeHandle
-
-// controllers/cookController.js - Fixed updateCookProfile with storeLink update
-
-// controllers/cookController.js - Fixed updateCookProfile
 
 export const updateCookProfile = async (req, res) => {
 	try {
@@ -343,7 +336,7 @@ export const updateCookProfile = async (req, res) => {
 			// Store info
 			"storeName",
 			"storeHandle",
-			"storeLink", // ✅ ADD storeLink to cookFields
+			"storeLink",
 			"storeDescription",
 			// Personal
 			"firstName",
@@ -365,6 +358,7 @@ export const updateCookProfile = async (req, res) => {
 			"location",
 			// Settings
 			"pickupWindow",
+			"pickupEnabled", // ✅ Added
 			"deliveryEnabled",
 			"deliveryFee",
 			"preparationDays",
@@ -405,10 +399,7 @@ export const updateCookProfile = async (req, res) => {
 				});
 			}
 
-			// ✅ Update storeHandle
 			updates.storeHandle = normalizedHandle;
-
-			// ✅ Update storeLink
 			updates.storeLink = `https://getameal-client.vercel.app/${normalizedHandle}`;
 		}
 
@@ -431,7 +422,7 @@ export const updateCookProfile = async (req, res) => {
 		if (updates.phone) user.phone = updates.phone;
 		if (updates.bio) user.bio = updates.bio;
 
-		// ✅ Update CookProfile model - storeLink is now included
+		// Update CookProfile model
 		cookFields.forEach((field) => {
 			if (updates[field] !== undefined) {
 				// Handle fees object specially (merge instead of replace)
@@ -480,7 +471,7 @@ export const updateCookProfile = async (req, res) => {
 			cookProfile.kitchenPhotos = updates.kitchenPhotos;
 		}
 
-		// ✅ Save both models
+		// Save both models
 		await user.save();
 		await cookProfile.save();
 
