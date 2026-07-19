@@ -12,9 +12,7 @@ dotenv.config();
 const fixCookCounts = async () => {
 	try {
 		// Connect to MongoDB
-		await mongoose.connect(
-			"mongodb+srv://confidinho:Ochuko.1996@cluster0.g7vyqdc.mongodb.net/getcooks?retryWrites=true&w=majority&appName=Cluster0",
-		);
+		await mongoose.connect(process.env.MONGODB_URI);
 		console.log("✅ Connected to MongoDB");
 
 		// Get all cook profiles
