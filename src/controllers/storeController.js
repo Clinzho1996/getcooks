@@ -1,4 +1,5 @@
-// controllers/storeController.js
+// controllers/storeController.js - Fixed with case-insensitive search
+
 import CookProfile from "../models/CookProfile.js";
 import Meal from "../models/Meal.js";
 
@@ -7,17 +8,58 @@ export const getStoreByHandle = async (req, res) => {
 		const { handle } = req.params;
 		const normalizedHandle = handle.toLowerCase().trim();
 
-		const cook = await CookProfile.findOne({
-			storeHandle: normalizedHandle,
-		}).populate("userId", "fullName email phone");
+		console.log(`🔍 Looking for store with handle: ${normalizedHandle}`);
+
+		// ✅ Try case-insensitive search first
+		let cook = await CookProfile.findOne({
+			storeHandle: { $regex: new RegExp(`^${normalizedHandle}$`, "i") },
+		});
+
+		// ✅ If not found, try exact match
+		if (!cook) {
+			cook = await CookProfile.findOne({
+				storeHandle: normalizedHandle,
+			});
+		}
+
+		// ✅ If still not found, try to find any with similar handle
+		if (!cook) {
+			const allStores = await CookProfile.find(
+				{},
+				{ storeHandle: 1, storeName: 1 },
+			);
+			console.log(
+				"📋 Available stores:",
+				allStores.map((s) => s.storeHandle),
+			);
+
+			// Try to find by storeName as fallback
+			cook = await CookProfile.findOne({
+				storeName: { $regex: new RegExp(normalizedHandle, "i") },
+			});
+		}
 
 		if (!cook) {
-			return res.status(404).json({ message: "Store not found" });
+			console.log(`❌ Store not found for handle: ${normalizedHandle}`);
+			return res.status(404).json({
+				success: false,
+				message: "Store not found",
+				availableHandles: await CookProfile.find(
+					{},
+					{ storeHandle: 1, _id: 0 },
+				),
+			});
 		}
+
+		console.log(`✅ Store found: ${cook.storeName} (${cook.storeHandle})`);
+
+		// ✅ Get the userId properly
+		const userId = cook.userId;
 
 		// Check if store is available
 		if (!cook.isAvailable) {
 			return res.status(403).json({
+				success: false,
 				message: "Store is currently paused",
 				isAvailable: false,
 			});
@@ -25,19 +67,13 @@ export const getStoreByHandle = async (req, res) => {
 
 		if (!cook.isApproved) {
 			return res.status(403).json({
+				success: false,
 				message: "Store is pending approval",
 				isApproved: false,
 			});
 		}
 
 		// Increment view count
-		const today = new Date();
-		today.setHours(0, 0, 0, 0);
-
-		// Update weekly views
-		const weekStart = new Date(today);
-		weekStart.setDate(today.getDate() - 7);
-
 		await CookProfile.updateOne(
 			{ _id: cook._id },
 			{
@@ -45,23 +81,25 @@ export const getStoreByHandle = async (req, res) => {
 				$push: {
 					viewsHistory: {
 						$each: [{ date: new Date(), count: 1 }],
-						$slice: -30, // Keep last 30 days
+						$slice: -30,
 					},
 				},
 			},
 		);
 
-		// Get products
+		// ✅ Get products using the correct userId
 		const products = await Meal.find({
-			cookId: cook.userId._id,
+			cookId: userId,
 			isAvailable: true,
 			status: "active",
 		}).sort({ createdAt: -1 });
 
-		// Get store info
+		console.log(`📦 Found ${products.length} products for store`);
+
+		// ✅ Build store info
 		const storeInfo = {
 			id: cook._id,
-			cookId: cook.userId._id, // ✅ Added cookId
+			cookId: userId,
 			storeName: cook.storeName,
 			storeHandle: cook.storeHandle,
 			storeLink: cook.storeLink,
@@ -74,14 +112,18 @@ export const getStoreByHandle = async (req, res) => {
 			kitchenAddress: cook.kitchenAddress,
 			pickupLandmark: cook.pickupLandmark,
 			pickupWindow: cook.pickupWindow,
-			deliveryEnabled: cook.deliveryEnabled,
-			deliveryFee: cook.deliveryFee,
-			preparationDays: cook.preparationDays,
+			pickupEnabled: cook.pickupEnabled !== false,
+			deliveryEnabled: cook.deliveryEnabled || false,
+			deliveryFee: cook.deliveryFee || 0,
+			preparationDays: cook.preparationDays || 1,
 			rating: cook.rating || 0,
 			reviewsCount: cook.reviewsCount || 0,
 			ordersCount: cook.ordersCount || 0,
 			isAvailable: cook.isAvailable,
 			isApproved: cook.isApproved,
+			fees: {
+				addFeesToCustomer: cook.fees?.addFeesToCustomer !== false,
+			},
 		};
 
 		res.json({
@@ -93,6 +135,8 @@ export const getStoreByHandle = async (req, res) => {
 				category: p.category,
 				whatsIncluded: p.whatsIncluded,
 				unitType: p.unitType,
+				unitDisplayName: p.unitDisplayName,
+				unitCount: p.unitCount || 1,
 				price: p.price,
 				customerPrice: p.customerPrice,
 				addOns: p.addOns,
@@ -103,7 +147,10 @@ export const getStoreByHandle = async (req, res) => {
 		});
 	} catch (error) {
 		console.error("Get store error:", error);
-		res.status(500).json({ message: error.message });
+		res.status(500).json({
+			success: false,
+			message: error.message,
+		});
 	}
 };
 
@@ -115,17 +162,33 @@ export const getStoreInfo = async (req, res) => {
 
 		const cook = await CookProfile.findOne({
 			storeHandle: normalizedHandle,
-		}).select(
-			"storeName storeLink storeDescription profileImage rating deliveryEnabled deliveryFee pickupWindow",
-		);
+		});
 
 		if (!cook) {
-			return res.status(404).json({ message: "Store not found" });
+			return res.status(404).json({
+				success: false,
+				message: "Store not found",
+			});
 		}
 
 		res.json({
 			success: true,
-			store: cook,
+			store: {
+				id: cook._id,
+				cookId: cook.userId,
+				storeName: cook.storeName,
+				storeLink: cook.storeLink,
+				storeDescription: cook.storeDescription,
+				profileImage: cook.profileImage,
+				rating: cook.rating || 0,
+				pickupEnabled: cook.pickupEnabled !== false,
+				deliveryEnabled: cook.deliveryEnabled || false,
+				deliveryFee: cook.deliveryFee || 0,
+				pickupWindow: cook.pickupWindow,
+				fees: {
+					addFeesToCustomer: cook.fees?.addFeesToCustomer !== false,
+				},
+			},
 		});
 	} catch (error) {
 		console.error("Get store info error:", error);
@@ -141,11 +204,17 @@ export const getStoreProducts = async (req, res) => {
 
 		const cook = await CookProfile.findOne({ storeHandle: normalizedHandle });
 		if (!cook) {
-			return res.status(404).json({ message: "Store not found" });
+			return res.status(404).json({
+				success: false,
+				message: "Store not found",
+			});
 		}
 
+		// ✅ Use cook.userId directly (it's the user ID, not an object)
+		const userId = cook.userId;
+
 		const products = await Meal.find({
-			cookId: cook.userId,
+			cookId: userId,
 			isAvailable: true,
 			status: "active",
 		}).sort({ createdAt: -1 });
@@ -158,6 +227,8 @@ export const getStoreProducts = async (req, res) => {
 				category: p.category,
 				whatsIncluded: p.whatsIncluded,
 				unitType: p.unitType,
+				unitDisplayName: p.unitDisplayName,
+				unitCount: p.unitCount || 1,
 				price: p.price,
 				customerPrice: p.customerPrice,
 				addOns: p.addOns,
