@@ -1,16 +1,9 @@
-// models/Review.js - Updated
+// models/Review.js
 
 import mongoose from "mongoose";
 
 const reviewSchema = new mongoose.Schema(
 	{
-		// ✅ Make user optional (for backward compatibility)
-		user: {
-			type: mongoose.Schema.Types.ObjectId,
-			ref: "User",
-			required: false, // Changed from true to false
-			index: true,
-		},
 		targetId: {
 			type: mongoose.Schema.Types.ObjectId,
 			required: true,
@@ -20,6 +13,12 @@ const reviewSchema = new mongoose.Schema(
 			type: String,
 			enum: ["cook", "meal"],
 			required: true,
+		},
+		// ✅ Store the user ID of the cook for order lookups
+		cookUserId: {
+			type: mongoose.Schema.Types.ObjectId,
+			ref: "User",
+			index: true,
 		},
 		rating: {
 			type: Number,
@@ -31,7 +30,6 @@ const reviewSchema = new mongoose.Schema(
 			type: String,
 			default: "",
 		},
-		// ✅ Customer info - no user reference needed
 		customerName: {
 			type: String,
 			required: true,
@@ -45,7 +43,7 @@ const reviewSchema = new mongoose.Schema(
 	{ timestamps: true },
 );
 
-// Ensure one review per customer per target
+// Indexes
 reviewSchema.index({ targetId: 1, customerPhone: 1 }, { unique: true });
 reviewSchema.index({ targetId: 1, targetType: 1 });
 

@@ -44,6 +44,7 @@ const cookProfileSchema = new mongoose.Schema(
 			from: { type: String, required: true },
 			to: { type: String, required: true },
 		},
+		noteForCustomers: { type: String, maxlength: 1000 },
 		// ✅ Add pickupEnabled
 		pickupEnabled: { type: Boolean, default: true },
 		deliveryEnabled: { type: Boolean, default: false },

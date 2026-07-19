@@ -109,6 +109,7 @@ export const getStoreByHandle = async (req, res) => {
 			phone: cook.phone,
 			email: cook.email,
 			state: cook.state,
+			noteForCustomers: cook.noteForCustomers || null,
 			kitchenAddress: cook.kitchenAddress,
 			pickupLandmark: cook.pickupLandmark,
 			pickupWindow: cook.pickupWindow,

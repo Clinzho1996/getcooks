@@ -617,6 +617,16 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
+		if (status === "delivered" || status === "picked_up") {
+			// ✅ Increment ordersCount in CookProfile
+			await CookProfile.findOneAndUpdate(
+				{ userId: order.cookId },
+				{ $inc: { ordersCount: 1 } },
+			);
+
+			console.log(`✅ Orders count incremented for cook ${order.cookId}`);
+		}
+
 		if (status === "picked_up" && order.deliveryType !== "pickup") {
 			return res.status(400).json({
 				message: "picked_up is only for pickup orders",

@@ -1,4 +1,4 @@
-// controllers/reviewController.js - Updated with notifications
+// controllers/reviewController.js - Complete
 
 import CookProfile from "../models/CookProfile.js";
 import Notification from "../models/Notification.js";
@@ -17,6 +17,15 @@ import {
 export const getCookReviews = async (req, res) => {
 	try {
 		const { cookId } = req.params;
+
+		// ✅ Find the cook profile first
+		const cookProfile = await CookProfile.findById(cookId);
+		if (!cookProfile) {
+			return res.status(404).json({
+				success: false,
+				message: "Cook not found",
+			});
+		}
 
 		const reviews = await Review.find({
 			targetId: cookId,
@@ -83,7 +92,6 @@ export const getMealReviews = async (req, res) => {
 
 // ===== PUBLIC CREATE REVIEW (No Auth - uses phone number) =====
 
-// Create Review - Public (No Auth required)
 export const createReview = async (req, res) => {
 	try {
 		const {
@@ -116,10 +124,38 @@ export const createReview = async (req, res) => {
 			});
 		}
 
-		// Verify the customer has actually ordered from this cook
+		// ✅ If targetType is "cook", get the cook profile to find the userId
+		let cookUserId = targetId;
+		let cookProfileId = targetId;
+
+		if (targetType === "cook") {
+			// Check if targetId is a cook profile ID or user ID
+			const cookProfile = await CookProfile.findById(targetId);
+
+			if (cookProfile) {
+				// targetId is a cook profile ID
+				cookProfileId = cookProfile._id;
+				cookUserId = cookProfile.userId;
+			} else {
+				// targetId might be a user ID, find the cook profile
+				const cookProfileByUser = await CookProfile.findOne({
+					userId: targetId,
+				});
+				if (cookProfileByUser) {
+					cookProfileId = cookProfileByUser._id;
+					cookUserId = targetId;
+				} else {
+					return res.status(404).json({
+						message: "Cook not found",
+					});
+				}
+			}
+		}
+
+		// ✅ Verify the customer has actually ordered from this cook
 		if (targetType === "cook") {
 			const hasOrdered = await Order.findOne({
-				cookId: targetId,
+				cookId: cookUserId, // Use the user ID for order lookup
 				customerPhone: customerPhone.replace(/\D/g, ""),
 				paymentStatus: "paid",
 				status: { $in: ["delivered", "picked_up"] },
@@ -132,9 +168,9 @@ export const createReview = async (req, res) => {
 			}
 		}
 
-		// Check if customer already reviewed this cook
+		// ✅ Check if customer already reviewed this cook (using cook profile ID)
 		const exists = await Review.findOne({
-			targetId,
+			targetId: cookProfileId, // Store the cook profile ID
 			targetType,
 			customerPhone: customerPhone.replace(/\D/g, ""),
 		});
@@ -154,33 +190,37 @@ export const createReview = async (req, res) => {
 			}
 		}
 
+		// ✅ Create review with cook profile ID
 		const review = await Review.create({
-			targetId,
+			targetId: cookProfileId, // Store the cook profile ID
 			targetType,
 			rating,
 			comment: comment || "",
 			customerName: customerNameToUse || "Anonymous",
 			customerPhone: customerPhone.replace(/\D/g, ""),
+			cookUserId: cookUserId, // Store user ID for reference
 		});
 
-		// Update cook profile rating
+		// ✅ Update cook profile rating
 		if (targetType === "cook") {
 			const allReviews = await Review.find({
-				targetId,
+				targetId: cookProfileId,
 				targetType: "cook",
 			});
 
 			const totalReviews = allReviews.length;
 			const avgRating =
-				allReviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews;
+				totalReviews > 0
+					? allReviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
+					: 0;
 
-			await CookProfile.findByIdAndUpdate(targetId, {
+			await CookProfile.findByIdAndUpdate(cookProfileId, {
 				rating: Math.round(avgRating * 10) / 10,
 				reviewsCount: totalReviews,
 			});
 
 			// ✅ Send notification to cook about new review
-			const cookProfile = await CookProfile.findById(targetId).populate(
+			const cookProfile = await CookProfile.findById(cookProfileId).populate(
 				"userId",
 				"fullName email phone",
 			);
@@ -200,7 +240,7 @@ export const createReview = async (req, res) => {
 						reviewId: review._id,
 						rating: rating,
 						customerName: customerNameToUse || "Customer",
-						targetId: targetId,
+						targetId: cookProfileId,
 					},
 				});
 
@@ -244,7 +284,7 @@ Keep up the great work! 🍽️`;
 			body: `${customerNameToUse || "Customer"} left a ${rating}⭐ review`,
 			type: "review",
 			data: {
-				targetId,
+				targetId: cookProfileId,
 				targetType,
 				reviewId: review._id,
 			},
@@ -323,6 +363,7 @@ export const updateReview = async (req, res) => {
 
 			await CookProfile.findByIdAndUpdate(review.targetId, {
 				rating: Math.round(avgRating * 10) / 10,
+				reviewsCount: allReviews.length,
 			});
 		}
 

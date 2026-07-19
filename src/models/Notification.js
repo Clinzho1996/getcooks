@@ -31,6 +31,7 @@ const notificationSchema = new mongoose.Schema(
 				"order",
 				"user",
 				"payment",
+				"review",
 				"withdrawal",
 				"cook_suspension",
 			],

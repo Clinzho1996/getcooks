@@ -8,6 +8,7 @@ import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
 import Meal from "../models/Meal.js";
 import Order from "../models/Order.js";
+import Review from "../models/Review.js";
 import User from "../models/User.js";
 import { createAdminNotification } from "../utils/adminNotification.js";
 
@@ -215,6 +216,8 @@ export const getCookById = async (req, res) => {
 // ============================================
 // GET COOK PROFILE (Authenticated)
 // ============================================
+// controllers/cookController.js - Updated getCookProfile
+
 export const getCookProfile = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -231,14 +234,32 @@ export const getCookProfile = async (req, res) => {
 			});
 		}
 
-		// Get counts
+		// Get real counts from database
 		const productCount = await Meal.countDocuments({ cookId: userId });
 		const activeProductCount = await Meal.countDocuments({
 			cookId: userId,
 			isAvailable: true,
 		});
 		const customerCount = await Customer.countDocuments({ cookId: userId });
-		const orderCount = await Order.countDocuments({ cookId: userId });
+
+		// ✅ Get REAL order count from orders
+		const orderCount = await Order.countDocuments({
+			cookId: userId,
+			status: { $in: ["delivered", "picked_up"] },
+			paymentStatus: "paid",
+		});
+
+		// ✅ Get REAL reviews data
+		const reviews = await Review.find({
+			targetId: cook._id,
+			targetType: "cook",
+		});
+
+		const totalReviews = reviews.length;
+		const avgRating =
+			totalReviews > 0
+				? reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
+				: 0;
 
 		const responseData = {
 			success: true,
@@ -263,9 +284,12 @@ export const getCookProfile = async (req, res) => {
 				isApproved: cook.isApproved,
 				isAvailable: cook.isAvailable,
 				isSuspended: cook.isSuspended || false,
-				rating: cook.rating || 0,
-				reviewsCount: cook.reviewsCount || 0,
-				ordersCount: cook.ordersCount || 0,
+
+				// ✅ Use REAL values from database
+				rating: Math.round(avgRating * 10) / 10,
+				reviewsCount: totalReviews,
+				ordersCount: orderCount, // ✅ Update this to use real count
+
 				walletBalance: cook.walletBalance || 0,
 				viewsThisWeek: cook.viewsThisWeek || 0,
 				bankDetails: cook.bankDetails,
@@ -278,7 +302,7 @@ export const getCookProfile = async (req, res) => {
 					products: productCount,
 					activeProducts: activeProductCount,
 					customers: customerCount,
-					orders: orderCount,
+					orders: orderCount, // ✅ This was already correct
 				},
 			},
 			user: {
@@ -306,6 +330,8 @@ export const getCookProfile = async (req, res) => {
 // ============================================
 // UPDATE COOK PROFILE
 // ============================================
+
+// controllers/cookController.js - Updated with noteForCustomers
 
 export const updateCookProfile = async (req, res) => {
 	try {
@@ -338,6 +364,8 @@ export const updateCookProfile = async (req, res) => {
 			"storeHandle",
 			"storeLink",
 			"storeDescription",
+			// ✅ Note for customers (visible on store page)
+			"noteForCustomers",
 			// Personal
 			"firstName",
 			"lastName",
@@ -358,7 +386,7 @@ export const updateCookProfile = async (req, res) => {
 			"location",
 			// Settings
 			"pickupWindow",
-			"pickupEnabled", // ✅ Added
+			"pickupEnabled",
 			"deliveryEnabled",
 			"deliveryFee",
 			"preparationDays",
