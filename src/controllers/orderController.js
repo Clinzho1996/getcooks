@@ -529,7 +529,7 @@ export const getOrderDetails = async (req, res) => {
 	}
 };
 
-// controllers/orderController.js - Updated updateOrderStatus with correct 5% platform fee
+// controllers/orderController.js - Updated updateOrderStatus
 
 export const updateOrderStatus = async (req, res) => {
 	try {
@@ -541,14 +541,12 @@ export const updateOrderStatus = async (req, res) => {
 			return res.status(400).json({ message: "Status is required" });
 		}
 
+		// ✅ Removed preparing and ready
 		const validStatuses = [
 			"pending",
 			"confirmed",
-			"preparing",
-			"ready",
-			"out_for_delivery",
-			"picked_up",
 			"delivered",
+			"picked_up",
 			"cancelled",
 		];
 
@@ -579,15 +577,12 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
-		// Validate transition
+		// ✅ Updated transitions - removed preparing and ready
 		const allowedTransitions = {
 			pending: ["confirmed", "cancelled"],
-			confirmed: ["preparing", "cancelled"],
-			preparing: ["ready", "cancelled"],
-			ready: ["out_for_delivery", "picked_up", "cancelled"],
-			out_for_delivery: ["delivered", "cancelled"],
-			picked_up: [],
+			confirmed: ["delivered", "picked_up", "cancelled"],
 			delivered: [],
+			picked_up: [],
 			cancelled: [],
 		};
 
@@ -602,14 +597,7 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
-		// Delivery type validation
-		if (status === "out_for_delivery" && order.deliveryType !== "delivery") {
-			return res.status(400).json({
-				message: "out_for_delivery is only for delivery orders",
-				suggestion: "Use 'picked_up' for pickup orders",
-			});
-		}
-
+		// ✅ Delivery type validation
 		if (status === "delivered" && order.deliveryType !== "delivery") {
 			return res.status(400).json({
 				message: "delivered is only for delivery orders",
@@ -617,21 +605,10 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
-		if (status === "delivered" || status === "picked_up") {
-			// ✅ Increment ordersCount in CookProfile
-			await CookProfile.findOneAndUpdate(
-				{ userId: order.cookId },
-				{ $inc: { ordersCount: 1 } },
-			);
-
-			console.log(`✅ Orders count incremented for cook ${order.cookId}`);
-		}
-
 		if (status === "picked_up" && order.deliveryType !== "pickup") {
 			return res.status(400).json({
 				message: "picked_up is only for pickup orders",
-				suggestion:
-					"Use 'out_for_delivery' then 'delivered' for delivery orders",
+				suggestion: "Use 'delivered' for delivery orders",
 			});
 		}
 
@@ -666,25 +643,21 @@ export const updateOrderStatus = async (req, res) => {
 
 				if (!existingTransaction) {
 					// ✅ Calculate cook's earnings based on fee toggle
-					const feesAddedToCustomer = order.feesAddedToCustomer !== false; // Default: true
+					const feesAddedToCustomer = order.feesAddedToCustomer !== false;
 					let cookAmount = 0;
 					let platformFee = 0;
 					let paystackFeeDeducted = 0;
 
 					if (feesAddedToCustomer) {
-						// ✅ Customer paid fees - deduct platform fee (5%)
 						const platformFeeRate = 0.05;
 						platformFee = order.totalAmount * platformFeeRate;
 						cookAmount =
 							Math.round((order.totalAmount - platformFee) * 100) / 100;
-						paystackFeeDeducted = 0; // Customer already paid Paystack fee
+						paystackFeeDeducted = 0;
 					} else {
-						// ✅ Cook absorbs fees - deduct platform fee (5%) + Paystack fee from cook's payout
 						const platformFeeRate = 0.05;
-						platformFee = order.subtotal * platformFeeRate; // 5% on food subtotal only
+						platformFee = order.subtotal * platformFeeRate;
 						const paystackFee = order.paystackFee || 0;
-
-						// Cook's earnings = totalAmount - platformFee - paystackFee
 						cookAmount =
 							Math.round(
 								(order.totalAmount - platformFee - paystackFee) * 100,
@@ -692,7 +665,6 @@ export const updateOrderStatus = async (req, res) => {
 						paystackFeeDeducted = paystackFee;
 					}
 
-					// Ensure cookAmount is not negative
 					if (cookAmount < 0) cookAmount = 0;
 
 					// Find cook user
@@ -718,6 +690,12 @@ export const updateOrderStatus = async (req, res) => {
 							100;
 						await cookProfile.save();
 					}
+
+					// ✅ Increment ordersCount in CookProfile
+					await CookProfile.findOneAndUpdate(
+						{ userId: order.cookId },
+						{ $inc: { ordersCount: 1 } },
+					);
 
 					// Create wallet transaction
 					try {
@@ -769,8 +747,6 @@ export const updateOrderStatus = async (req, res) => {
 					console.log(`Order ${order._id} already credited`);
 					walletCredited = true;
 					walletAmount = existingTransaction?.amount || 0;
-
-					// ✅ Fetch the cook to get current balance
 					cook = await User.findById(order.cookId);
 				}
 			} catch (error) {
@@ -778,7 +754,7 @@ export const updateOrderStatus = async (req, res) => {
 			}
 		}
 
-		// Update order status (only if status is different)
+		// Update order status
 		if (oldStatus !== status) {
 			order.status = status;
 		}
