@@ -857,13 +857,15 @@ export const getOrderRequests = async (req, res) => {
 	}
 };
 
+// controllers/orderController.js - Updated acceptOrderRequest with receipt URL
+
 export const acceptOrderRequest = async (req, res) => {
 	try {
 		const userId = req.user._id;
 		const { requestId } = req.params;
 		const { amount } = req.body;
 
-		// Amount is required - cook sets the price for food
+		// Amount is required - cook sets the price
 		if (!amount || amount <= 0) {
 			return res.status(400).json({
 				message: "Please set a price for this order",
@@ -897,27 +899,16 @@ export const acceptOrderRequest = async (req, res) => {
 		let totalAmount = 0;
 
 		if (addFeesToCustomer) {
-			// Fees added to customer (only on food)
 			serviceFee = amount * 0.05;
 			paystackFee = (amount + serviceFee) * 0.015 + 1;
 			totalAmount =
 				Math.round((amount + serviceFee + paystackFee + deliveryFee) * 100) /
 				100;
 		} else {
-			// Cook absorbs fees
 			totalAmount = Math.round((amount + deliveryFee) * 100) / 100;
 			serviceFee = amount * 0.05;
 			paystackFee = (amount + serviceFee) * 0.015 + 1;
 		}
-
-		console.log("💰 Custom Order Calculation:", {
-			foodAmount: amount,
-			deliveryFee: deliveryFee,
-			serviceFee: serviceFee,
-			paystackFee: paystackFee,
-			addFeesToCustomer: addFeesToCustomer,
-			totalAmount: totalAmount,
-		});
 
 		// Update order
 		order.subtotal = amount;
@@ -958,19 +949,24 @@ export const acceptOrderRequest = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
-		// Send WhatsApp with payment link
+		// ✅ Create receipt URL for customer
+		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+
+		// ✅ Send WhatsApp with payment link AND receipt URL
 		const whatsappMessage = `Hi ${order.customerName}! 🍽️
 
 Your order has been accepted by ${cook.storeName}!
 
-📋 Order Details:
+Order Details:
 • Order: ${order.customOrderTitle || order.customerNote || "Custom Order"}
 • Food Amount: ₦${amount.toFixed(2)}
 ${deliveryFee > 0 ? `• Delivery Fee: ₦${deliveryFee.toFixed(2)}` : ""}
 • Total: ₦${totalAmount.toFixed(2)}
 • Ready: ${new Date(order.readyDate).toLocaleDateString()}
 
-🔗 Pay here: ${order.paymentLink}
+Pay here: ${order.paymentLink}
+
+View your receipt: ${receiptUrl}
 
 Thank you for choosing ${cook.storeName}!`;
 
@@ -990,6 +986,7 @@ Thank you for choosing ${cook.storeName}!`;
 				totalAmount: order.totalAmount,
 				feesAddedToCustomer: order.feesAddedToCustomer,
 				paymentLink: order.paymentLink,
+				receiptUrl: receiptUrl,
 				status: order.status,
 				whatsappUrl: whatsappUrl,
 			},
@@ -1200,6 +1197,8 @@ export const createCustomOrder = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
+		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+
 		// Send WhatsApp to customer
 		const whatsappMessage = `Hi ${customer.fullName}! 
 
@@ -1214,6 +1213,9 @@ ${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}`
 • Time: ${readyTime || "12:00"}
 
 Pay here: ${order.paymentLink}
+
+View your receipt: ${receiptUrl}
+
 
 Thank you for choosing ${cook.storeName}!`;
 
@@ -1235,6 +1237,7 @@ Thank you for choosing ${cook.storeName}!`;
 				feesAddedToCustomer: order.feesAddedToCustomer,
 				status: order.status,
 				paymentLink: order.paymentLink,
+				receiptUrl: receiptUrl,
 				readyDate: order.readyDate,
 				deliveryType: order.deliveryType,
 				whatsappUrl: whatsappUrl,
@@ -1508,6 +1511,8 @@ export const createOrderFromCart = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
+		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+
 		// Send push notification to cook
 		await sendPushToUser(
 			cookId,
@@ -1539,6 +1544,7 @@ export const createOrderFromCart = async (req, res) => {
 				status: order.status,
 				paymentStatus: order.paymentStatus,
 				paymentLink: order.paymentLink,
+				receiptUrl: receiptUrl,
 				items: order.items.map((item) => ({
 					name: item.name,
 					quantity: item.quantity,
