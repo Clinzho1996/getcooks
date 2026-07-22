@@ -509,6 +509,8 @@ export const signupComplete = async (req, res) => {
 
 // ===== SOCIAL AUTH (Google & Apple) =====
 
+// controllers/authController.js - Updated socialAuth
+
 export const socialAuth = async (req, res) => {
 	try {
 		const { idToken, name, email, appleUserId } = req.body;
@@ -563,22 +565,26 @@ export const socialAuth = async (req, res) => {
 
 			// Check if user is a cook
 			if (!user.isCook) {
-				// User exists but is not a cook - they need to complete cook onboarding
+				// ✅ User exists but is not a cook - they need to complete cook onboarding
+				// Generate token so they can access the onboarding flow
+				const token = generateToken(user._id);
+
 				return res.status(200).json({
 					success: true,
 					message: "User found. Please complete cook onboarding.",
 					requiresOnboarding: true,
+					token,
 					user: {
 						_id: user._id,
 						email: user.email,
 						fullName: user.fullName,
 						isCook: user.isCook,
+						phone: user.phone,
 					},
-					token: generateToken(user._id),
 				});
 			}
 
-			// User is a cook - proceed with login
+			// ✅ User is a cook - proceed with login
 			// Update user info
 			let needsUpdate = false;
 
@@ -642,7 +648,6 @@ export const socialAuth = async (req, res) => {
 				provider: user.provider,
 			};
 
-			// Cook profile data
 			const cookProfileData = {
 				id: cookProfile._id,
 				storeName: cookProfile.storeName,
@@ -692,7 +697,7 @@ export const socialAuth = async (req, res) => {
 			firebaseUid: uid,
 			appleUserId: appleUserId || undefined,
 			provider,
-			isVerified: true,
+			isVerified: true, // ✅ Social users are automatically verified
 			status: "active",
 			isCook: false, // Not a cook yet
 			role: "user",
@@ -701,7 +706,7 @@ export const socialAuth = async (req, res) => {
 
 		const token = generateToken(user._id);
 
-		// User created but needs to complete cook onboarding
+		// ✅ User created but needs to complete cook onboarding
 		return res.status(200).json({
 			success: true,
 			message: "Account created. Please complete cook onboarding.",
@@ -715,6 +720,7 @@ export const socialAuth = async (req, res) => {
 				role: user.role,
 				status: user.status,
 				isVerified: user.isVerified,
+				phone: user.phone,
 			},
 		});
 	} catch (error) {
@@ -740,6 +746,7 @@ export const socialAuth = async (req, res) => {
 								email: existingUser.email,
 								fullName: existingUser.fullName,
 								isCook: existingUser.isCook,
+								phone: existingUser.phone,
 							},
 						});
 					}
