@@ -912,9 +912,6 @@ export const createProduct = async (req, res) => {
 		if (!cook) {
 			return res.status(404).json({ message: "Cook profile not found" });
 		}
-		if (!cook.isApproved) {
-			return res.status(403).json({ message: "Store is not approved yet" });
-		}
 
 		// Handle images
 		let images = [];
