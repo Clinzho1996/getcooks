@@ -273,6 +273,8 @@ export const signupVerify = async (req, res) => {
 // STEP 3: Complete Signup - Cook Onboarding
 // controllers/authController.js - Updated signupComplete with image upload
 
+// controllers/authController.js - Fixed signupComplete
+
 export const signupComplete = async (req, res) => {
 	try {
 		const {
@@ -311,16 +313,25 @@ export const signupComplete = async (req, res) => {
 			});
 		}
 
-		// Check OTP verification
-		const otpRecord = await OTP.findOne({
-			email: normalizedEmail,
-			verified: true,
-		});
+		// ✅ Check if user is a social auth user (already verified)
+		const isSocialUser = user && user.provider && user.provider !== "email";
 
-		if (!otpRecord) {
-			return res.status(400).json({
-				message: "Email not verified. Please verify your email with OTP first.",
+		// ✅ Only check OTP for email users (non-social)
+		if (!isSocialUser) {
+			const otpRecord = await OTP.findOne({
+				email: normalizedEmail,
+				verified: true,
 			});
+
+			if (!otpRecord) {
+				return res.status(400).json({
+					message:
+						"Email not verified. Please verify your email with OTP first.",
+				});
+			}
+
+			// Clean up OTP
+			await OTP.deleteOne({ _id: otpRecord._id });
 		}
 
 		// Check if store handle is available
@@ -378,7 +389,6 @@ export const signupComplete = async (req, res) => {
 				fs.unlinkSync(req.files.profileImage[0].path);
 			} catch (uploadError) {
 				console.error("Profile image upload error:", uploadError);
-				// Continue without image
 			}
 		}
 
@@ -396,7 +406,6 @@ export const signupComplete = async (req, res) => {
 				fs.unlinkSync(req.files.coverImage[0].path);
 			} catch (uploadError) {
 				console.error("Cover image upload error:", uploadError);
-				// Continue without image
 			}
 		}
 
@@ -452,9 +461,6 @@ export const signupComplete = async (req, res) => {
 			walletBalance: 0,
 			storeLink: `https://getameal-client.vercel.app/${normalizedHandle}`,
 		});
-
-		// Clean up OTP
-		await OTP.deleteOne({ _id: otpRecord._id });
 
 		const token = generateToken(user._id);
 
