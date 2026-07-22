@@ -531,6 +531,8 @@ export const getOrderDetails = async (req, res) => {
 
 // controllers/orderController.js - Updated updateOrderStatus
 
+// controllers/orderController.js - Fixed updateOrderStatus
+
 export const updateOrderStatus = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -541,7 +543,6 @@ export const updateOrderStatus = async (req, res) => {
 			return res.status(400).json({ message: "Status is required" });
 		}
 
-		// ✅ Removed preparing and ready
 		const validStatuses = [
 			"pending",
 			"confirmed",
@@ -566,7 +567,7 @@ export const updateOrderStatus = async (req, res) => {
 			return res.status(404).json({ message: "Order not found" });
 		}
 
-		// ✅ Check if order is paid before allowing completion
+		// Check if order is paid before allowing completion
 		if (
 			(status === "delivered" || status === "picked_up") &&
 			order.paymentStatus !== "paid"
@@ -577,7 +578,6 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
-		// ✅ Updated transitions - removed preparing and ready
 		const allowedTransitions = {
 			pending: ["confirmed", "cancelled"],
 			confirmed: ["delivered", "picked_up", "cancelled"],
@@ -597,7 +597,7 @@ export const updateOrderStatus = async (req, res) => {
 			});
 		}
 
-		// ✅ Delivery type validation
+		// Delivery type validation
 		if (status === "delivered" && order.deliveryType !== "delivery") {
 			return res.status(400).json({
 				message: "delivered is only for delivery orders",
@@ -619,14 +619,18 @@ export const updateOrderStatus = async (req, res) => {
 		let walletAmount = 0;
 		let cook = null;
 
+		// ✅ FIX: Check if we're completing the order (status is changing TO delivered/picked_up)
 		const isCompletingOrder =
 			(status === "delivered" || status === "picked_up") &&
 			order.paymentStatus === "paid";
+
+		// Check if order is already completed (for idempotency)
 		const isAlreadyCompleted =
 			(order.status === "delivered" || order.status === "picked_up") &&
 			order.paymentStatus === "paid";
 
-		if (isCompletingOrder || (isSameStatus && isAlreadyCompleted)) {
+		// ✅ Credit wallet if completing order OR if already completed but not credited
+		if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
 			try {
 				// Check if already credited
 				let existingTransaction = null;
@@ -642,7 +646,7 @@ export const updateOrderStatus = async (req, res) => {
 				}
 
 				if (!existingTransaction) {
-					// ✅ Calculate cook's earnings based on fee toggle
+					// Calculate cook's earnings based on fee toggle
 					const feesAddedToCustomer = order.feesAddedToCustomer !== false;
 					let cookAmount = 0;
 					let platformFee = 0;
@@ -691,7 +695,7 @@ export const updateOrderStatus = async (req, res) => {
 						await cookProfile.save();
 					}
 
-					// ✅ Increment ordersCount in CookProfile
+					// Increment ordersCount in CookProfile
 					await CookProfile.findOneAndUpdate(
 						{ userId: order.cookId },
 						{ $inc: { ordersCount: 1 } },
@@ -761,7 +765,7 @@ export const updateOrderStatus = async (req, res) => {
 		if (sellerNote) order.sellerNote = sellerNote;
 		await order.save();
 
-		// ✅ Fetch fresh cook data for accurate balance
+		// Fetch fresh cook data for accurate balance
 		if (!cook) {
 			cook = await User.findById(order.cookId);
 		}
