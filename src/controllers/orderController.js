@@ -837,8 +837,6 @@ export const getOrderRequests = async (req, res) => {
 	}
 };
 
-// controllers/orderController.js - Updated acceptOrderRequest with receipt URL
-
 export const acceptOrderRequest = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -929,6 +927,9 @@ export const acceptOrderRequest = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
+		// In acceptOrderRequest
+		const formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodeURIComponent(order.paymentLink)}`;
+
 		// ✅ Create receipt URL for customer
 		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
@@ -944,7 +945,7 @@ ${deliveryFee > 0 ? `• Delivery Fee: ₦${deliveryFee.toFixed(2)}` : ""}
 • Total: ₦${totalAmount.toFixed(2)}
 • Ready: ${new Date(order.readyDate).toLocaleDateString()}
 
-Pay here: ${order.paymentLink}
+Pay here: ${formattedPaymentLink}
 
 View your receipt: ${receiptUrl}
 
@@ -1042,6 +1043,8 @@ Thank you for choosing GetAMeal!`;
 };
 
 // controllers/orderController.js - Fixed createCustomOrder
+
+// controllers/orderController.js - Updated createCustomOrder with formatted payment link
 
 export const createCustomOrder = async (req, res) => {
 	try {
@@ -1179,12 +1182,16 @@ export const createCustomOrder = async (req, res) => {
 
 		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
-		// Send WhatsApp to customer
-		const whatsappMessage = `Hi ${customer.fullName}! 
+		// ✅ Format payment link: hide Paystack URL behind our frontend
+		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
+		const formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}`;
+
+		// Send WhatsApp to customer with formatted payment link
+		const whatsappMessage = `Hi ${customer.fullName}! 🍽️
 
 Your custom order has been created by ${cook.storeName}!
 
-Order Details:
+📋 Order Details:
 • Order: ${title}
 • Food Amount: ₦${amount.toFixed(2)}
 ${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}` : ""}
@@ -1192,10 +1199,9 @@ ${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}`
 • Ready: ${new Date(readyDate).toLocaleDateString()}
 • Time: ${readyTime || "12:00"}
 
-Pay here: ${order.paymentLink}
+🔗 Pay here: ${formattedPaymentLink}
 
-View your receipt: ${receiptUrl}
-
+📱 View your receipt: ${receiptUrl}
 
 Thank you for choosing ${cook.storeName}!`;
 
@@ -1216,7 +1222,8 @@ Thank you for choosing ${cook.storeName}!`;
 				totalAmount: order.totalAmount,
 				feesAddedToCustomer: order.feesAddedToCustomer,
 				status: order.status,
-				paymentLink: order.paymentLink,
+				paymentLink: formattedPaymentLink, // ✅ Formatted payment link
+				rawPaymentLink: order.paymentLink, // ✅ Keep raw for reference if needed
 				receiptUrl: receiptUrl,
 				readyDate: order.readyDate,
 				deliveryType: order.deliveryType,
