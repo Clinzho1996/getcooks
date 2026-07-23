@@ -229,6 +229,9 @@ export const signupInit = async (req, res) => {
 };
 
 // STEP 2: Verify OTP
+// controllers/authController.js - Updated signupVerify with token
+
+// STEP 2: Verify OTP
 export const signupVerify = async (req, res) => {
 	try {
 		let { email, otp } = req.body;
@@ -258,11 +261,37 @@ export const signupVerify = async (req, res) => {
 		record.verified = true;
 		await record.save();
 
+		// ✅ Find or create user to generate token
+		let user = await User.findOne({ email });
+
+		// If user doesn't exist yet, create a temporary user
+		if (!user) {
+			user = await User.create({
+				email: email,
+				isVerified: true,
+				status: "active",
+				role: "user",
+			});
+		}
+
+		// ✅ Generate token for the user
+		const token = generateToken(user._id);
+
 		res.status(200).json({
+			success: true,
 			message: "OTP verified successfully",
 			verified: true,
+			token: token,
+			user: {
+				_id: user._id,
+				email: user.email,
+				fullName: user.fullName || null,
+				isCook: user.isCook || false,
+				role: user.role || "user",
+			},
 		});
 	} catch (error) {
+		console.error("Signup verify error:", error);
 		res.status(500).json({
 			message: "Server error",
 			error: error.message,
