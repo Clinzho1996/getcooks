@@ -9,6 +9,13 @@ import Order from "../models/Order.js";
 import User from "../models/User.js";
 import WalletTransaction from "../models/WalletTransaction.js";
 import { sendPushToUser } from "../services/pushService.js";
+import {
+	sendCustomOrderToCustomer,
+	sendNewOrderToCook,
+	sendOrderStatusUpdate,
+	sendPaymentConfirmationToCook,
+	sendWalletCreditToCook,
+} from "../utils/whatsappNotifications.js";
 
 // ============================================
 // CUSTOMER ORDER CREATION (Public - No Auth)
@@ -121,6 +128,13 @@ export const createCustomerOrder = async (req, res) => {
 
 		// Create the order
 		const order = await Order.create(orderData);
+
+		if (order) {
+			const cook = await CookProfile.findOne({ userId: order.cookId });
+			if (cook) {
+				await sendNewOrderToCook(cook, order);
+			}
+		}
 
 		// Update customer stats
 		await Customer.findByIdAndUpdate(customer._id, {
@@ -409,6 +423,13 @@ export const handlePaymentCallback = async (req, res) => {
 			);
 		}
 
+		if (order) {
+			const cook = await CookProfile.findOne({ userId: order.cookId });
+			if (cook) {
+				await sendPaymentConfirmationToCook(cook, order);
+			}
+		}
+
 		// ✅ FIX: Round both amounts to 2 decimal places for comparison
 		const paidAmount = Math.round((paymentData.amount / 100) * 100) / 100;
 		const expectedAmount = Math.round(order.totalAmount * 100) / 100;
@@ -642,6 +663,19 @@ export const updateOrderStatus = async (req, res) => {
 				suggestion: "Use 'delivered' for delivery orders",
 			});
 		}
+
+		if (status === "delivered" || status === "picked_up") {
+			const cook = await CookProfile.findOne({ userId: order.cookId });
+			if (cook) {
+				await sendWalletCreditToCook(cook, order, walletAmount);
+			}
+		}
+
+		const customer = {
+			customerName: order.customerName,
+			customerPhone: order.customerPhone,
+		};
+		await sendOrderStatusUpdate(order, cook, status);
 
 		const oldStatus = order.status;
 
@@ -955,6 +989,11 @@ export const acceptOrderRequest = async (req, res) => {
 			},
 		);
 
+		if (cook) {
+			const message = `✅ Order Accepted!\n\nCustomer: ${order.customerName}\nAmount: ₦${order.totalAmount.toFixed(2)}\nReady: ${new Date(order.readyDate).toLocaleDateString()}\n\n🔗 Payment link: ${order.paymentLink}`;
+			await sendWhatsAppToCustomer(order, message);
+		}
+
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
@@ -1179,6 +1218,13 @@ export const createCustomOrder = async (req, res) => {
 			status: "pending",
 			customerNote: customerNote || "",
 		});
+
+		if (order) {
+			const cook = await CookProfile.findOne({ userId: order.cookId });
+			if (cook) {
+				await sendCustomOrderToCustomer(order, cook, order);
+			}
+		}
 
 		// Update customer stats
 		await Customer.findByIdAndUpdate(customer._id, {
