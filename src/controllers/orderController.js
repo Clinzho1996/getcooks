@@ -165,9 +165,6 @@ export const createCustomerOrder = async (req, res) => {
 	}
 };
 
-// ============================================
-// GET CUSTOMER ORDER DETAILS (Public)
-// ============================================
 // controllers/orderController.js - Updated getCustomerOrderDetails
 
 export const getCustomerOrderDetails = async (req, res) => {
@@ -192,6 +189,19 @@ export const getCustomerOrderDetails = async (req, res) => {
 		}
 
 		const cookProfile = await CookProfile.findOne({ userId: order.cookId });
+
+		// ✅ Get payment link (raw Paystack link and formatted)
+		const rawPaymentLink = order.paymentLink || null;
+
+		// ✅ Format payment link if it exists
+		let formattedPaymentLink = null;
+		if (rawPaymentLink && cookProfile) {
+			const encodedPaystackLink = encodeURIComponent(rawPaymentLink);
+			formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cookProfile.storeHandle}&link=${encodedPaystackLink}`;
+		}
+
+		// ✅ Check if order is paid
+		const isPaid = order.paymentStatus === "paid";
 
 		res.json({
 			success: true,
@@ -237,11 +247,23 @@ export const getCustomerOrderDetails = async (req, res) => {
 				// ✅ Financials
 				subtotal: order.subtotal,
 				serviceFee: order.serviceFee,
+				paystackFee: order.paystackFee || 0,
 				totalAmount: order.totalAmount,
+
+				// ✅ Payment Details
+				paymentStatus: order.paymentStatus,
+				paymentMethod: order.paymentMethod || "paystack",
+				paymentReference: order.paymentReference || null,
+				paymentLink: formattedPaymentLink, // ✅ Formatted payment link
+				rawPaymentLink: rawPaymentLink, // ✅ Raw Paystack link (if needed)
+				isPaid: isPaid,
 
 				// ✅ Status
 				status: order.status,
-				paymentStatus: order.paymentStatus,
+				statusHistory: {
+					current: order.status,
+					previous: order.oldStatus || null,
+				},
 
 				// ✅ Notes
 				customerNote: order.customerNote || null,
@@ -257,13 +279,22 @@ export const getCustomerOrderDetails = async (req, res) => {
 					storeName: cookProfile?.storeName || null,
 					storeHandle: cookProfile?.storeHandle || null,
 					storeLink: cookProfile?.storeLink || null,
-					profileImage: cookProfile?.profileImage || null,
 					kitchenAddress: cookProfile?.kitchenAddress || null,
 					pickupLandmark: cookProfile?.pickupLandmark || null,
 					pickupWindow: cookProfile?.pickupWindow || null,
+					pickupEnabled: cookProfile?.pickupEnabled !== false,
+					deliveryEnabled: cookProfile?.deliveryEnabled || false,
 					rating: cookProfile?.rating || 0,
 					reviewsCount: cookProfile?.reviewsCount || 0,
+					isApproved: cookProfile?.isApproved || false,
+					isAvailable: cookProfile?.isAvailable || false,
 				},
+
+				// ✅ Receipt URL
+				receiptUrl: `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`,
+
+				// ✅ Fee toggle info
+				feesAddedToCustomer: order.feesAddedToCustomer !== false,
 			},
 		});
 	} catch (error) {
