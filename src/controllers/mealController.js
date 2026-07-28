@@ -367,6 +367,8 @@ export const deleteMeal = async (req, res) => {
 	}
 };
 
+// controllers/mealController.js - Updated duplicateMeal
+
 export const duplicateMeal = async (req, res) => {
 	try {
 		const { id } = req.params;
@@ -376,50 +378,94 @@ export const duplicateMeal = async (req, res) => {
 			return res.status(400).json({ message: "Invalid meal ID" });
 		}
 
-		// Find original meal
-		const originalMeal = await Meal.findById(id);
-		if (!originalMeal) {
-			return res.status(404).json({ message: "Meal not found" });
+		// Find original product
+		const originalProduct = await Meal.findById(id);
+		if (!originalProduct) {
+			return res.status(404).json({ message: "Product not found" });
 		}
 
 		// Ensure only owner can duplicate
-		if (originalMeal.cookId.toString() !== req.user._id.toString()) {
+		if (originalProduct.cookId.toString() !== req.user._id.toString()) {
 			return res.status(403).json({ message: "Not authorized" });
 		}
 
-		// Duplicate meal
-		const duplicatedMeal = new Meal({
-			cookId: originalMeal.cookId,
-			category: originalMeal.category,
-			name: `${originalMeal.name} (Copy)`,
-			description: originalMeal.description,
-			unitsPerQuantity: originalMeal.unitsPerQuantity,
-			price: originalMeal.price,
-			quantityLabel: originalMeal.quantityLabel,
-			portionsTotal: originalMeal.portionsTotal,
-			portionsRemaining: originalMeal.portionsTotal, // reset
-			cookingDate: originalMeal.cookingDate,
-			pickupWindow: originalMeal.pickupWindow,
-			deliveryRegions: originalMeal.deliveryRegions,
-			images: originalMeal.images, // reuse images
-			status: "open", // reset status
+		// ✅ Duplicate product with all new fields
+		const duplicatedProduct = new Meal({
+			cookId: originalProduct.cookId,
+			// Product Information
+			name: `${originalProduct.name} (Copy)`,
+			category: originalProduct.category,
+			whatsIncluded: originalProduct.whatsIncluded,
+			// Pricing
+			unitType: originalProduct.unitType,
+			unitDisplayName: originalProduct.unitDisplayName,
+			unitCount: originalProduct.unitCount || 1,
+			price: originalProduct.price,
+			customerPrice: originalProduct.customerPrice,
+			// Add-ons
+			addOns: originalProduct.addOns || [],
+			// Images
+			images: originalProduct.images,
+			// Availability
+			isAvailable: true,
+			isAlwaysAvailable: originalProduct.isAlwaysAvailable || false,
+			// Status
+			status: "active",
 		});
 
+		await duplicatedProduct.save();
+
+		// Admin notification
 		await createAdminNotification({
-			title: "Meal Duplicated",
-			body: `The meal "${originalMeal.name}" was duplicated by ${req.user.fullName}`,
-			type: "meal",
-			data: { mealId: duplicatedMeal._id },
+			title: "Product Duplicated",
+			body: `The product "${originalProduct.name}" was duplicated by ${req.user.fullName}`,
+			type: "product",
+			data: {
+				productId: duplicatedProduct._id,
+				originalProductId: originalProduct._id,
+				cookId: req.user._id,
+			},
 		});
 
-		await duplicatedMeal.save();
+		// Send push notification to cook
+		await sendPushToUser(
+			req.user._id,
+			"Product Duplicated",
+			`You duplicated "${originalProduct.name}" successfully!`,
+			{
+				type: "product_duplicated",
+				productId: duplicatedProduct._id,
+				productName: duplicatedProduct.name,
+			},
+		);
 
 		res.status(201).json({
-			message: "Meal duplicated successfully",
-			meal: duplicatedMeal,
+			success: true,
+			message: "Product duplicated successfully",
+			product: {
+				id: duplicatedProduct._id,
+				name: duplicatedProduct.name,
+				category: duplicatedProduct.category,
+				whatsIncluded: duplicatedProduct.whatsIncluded,
+				unitType: duplicatedProduct.unitType,
+				unitDisplayName: duplicatedProduct.unitDisplayName,
+				unitCount: duplicatedProduct.unitCount,
+				price: duplicatedProduct.price,
+				customerPrice: duplicatedProduct.customerPrice,
+				addOns: duplicatedProduct.addOns,
+				images: duplicatedProduct.images,
+				isAvailable: duplicatedProduct.isAvailable,
+				isAlwaysAvailable: duplicatedProduct.isAlwaysAvailable,
+				status: duplicatedProduct.status,
+				createdAt: duplicatedProduct.createdAt,
+			},
 		});
 	} catch (error) {
-		res.status(500).json({ message: error.message });
+		console.error("Duplicate product error:", error);
+		res.status(500).json({
+			message: "Failed to duplicate product",
+			error: error.message,
+		});
 	}
 };
 
