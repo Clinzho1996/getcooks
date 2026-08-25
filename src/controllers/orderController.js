@@ -948,7 +948,7 @@ export const acceptOrderRequest = async (req, res) => {
 				email: order.customerEmail || `${order.customerPhone}@getameal.com`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
-				callback_url: `${process.env.API_URL}/customer/payment/callback`,
+				callback_url: `${process.env.API_URL}/payment/callback`,
 				metadata: {
 					orderId: order._id.toString(),
 					cookId: userId.toString(),
@@ -1213,7 +1213,7 @@ export const createCustomOrder = async (req, res) => {
 				email: customer.email || `${customer.phoneNumber}@getameal.com`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
-				callback_url: `${process.env.API_URL}/customer/payment/callback`,
+				callback_url: `${process.env.API_URL}/payment/callback`,
 				metadata: {
 					orderId: order._id.toString(),
 					cookId: userId.toString(),
@@ -1530,7 +1530,7 @@ export const createOrderFromCart = async (req, res) => {
 				email: customerEmail || `${customerPhone}@getameal.com`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
-				callback_url: `${process.env.API_URL}/customer/payment/callback`,
+				callback_url: `${process.env.API_URL}/payment/callback`,
 				metadata: {
 					orderId: order._id.toString(),
 					cookId: cookId.toString(),
