@@ -72,7 +72,7 @@ export const sendOrderStatusUpdate = async (order, cook, status) => {
 	const message =
 		statusMessages[status] ||
 		`Your order status has been updated to: ${status}`;
-	const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+	const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
 	const fullMessage = `${message}\n\n📱 View your receipt: ${receiptUrl}`;
 
@@ -81,7 +81,7 @@ export const sendOrderStatusUpdate = async (order, cook, status) => {
 
 // ✅ Send new order notification to cook
 export const sendNewOrderToCook = async (cook, order) => {
-	const message = `New Order Received!\n\nCustomer: ${order.customerName}\nOrder: ${order.customOrderTitle || "Custom Order"}\nAmount: ₦${order.totalAmount.toFixed(2)}\nReady: ${new Date(order.readyDate).toLocaleDateString()}\n\n📱 View order: https://getameal-client.vercel.app/dashboard/orders/${order._id}`;
+	const message = `New Order Received!\n\nCustomer: ${order.customerName}\nOrder: ${order.customOrderTitle || "Custom Order"}\nAmount: ₦${order.totalAmount.toFixed(2)}\nReady: ${new Date(order.readyDate).toLocaleDateString()}\n\n📱 View order: https://getameal-web.vercel.app/dashboard/orders/${order._id}`;
 
 	return await sendWhatsAppToCook(cook, message);
 };
@@ -102,8 +102,8 @@ export const sendWalletCreditToCook = async (cook, order, amount) => {
 
 // ✅ Send custom order creation to customer
 export const sendCustomOrderToCustomer = async (customer, cook, order) => {
-	const formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodeURIComponent(order.paymentLink)}`;
-	const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+	const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodeURIComponent(order.paymentLink)}`;
+	const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
 	const message = `Hi ${customer.customerName}!
 

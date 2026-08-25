@@ -211,7 +211,7 @@ export const getCustomerOrderDetails = async (req, res) => {
 		let formattedPaymentLink = null;
 		if (rawPaymentLink && cookProfile) {
 			const encodedPaystackLink = encodeURIComponent(rawPaymentLink);
-			formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cookProfile.storeHandle}&link=${encodedPaystackLink}`;
+			formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cookProfile.storeHandle}&link=${encodedPaystackLink}`;
 		}
 
 		// ✅ Check if order is paid
@@ -305,7 +305,7 @@ export const getCustomerOrderDetails = async (req, res) => {
 				},
 
 				// ✅ Receipt URL
-				receiptUrl: `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`,
+				receiptUrl: `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`,
 
 				// ✅ Fee toggle info
 				feesAddedToCustomer: order.feesAddedToCustomer !== false,
@@ -326,7 +326,7 @@ export const getCustomerOrderDetails = async (req, res) => {
 export const paymentRedirect = async (req, res) => {
 	try {
 		const { orderId, reference, status } = req.query;
-		const redirectUrl = `https://getameal-client.vercel.app/order-confirmed?orderId=${orderId}&reference=${reference}&status=${status || "success"}`;
+		const redirectUrl = `https://getameal-web.vercel.app/order-confirmed?orderId=${orderId}&reference=${reference}&status=${status || "success"}`;
 		return res.redirect(redirectUrl);
 	} catch (error) {
 		console.error("Redirect error:", error);
@@ -419,7 +419,7 @@ export const handlePaymentCallback = async (req, res) => {
 			}
 
 			return res.redirect(
-				`https://getameal-client.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Already+processed`,
+				`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Already+processed`,
 			);
 		}
 
@@ -455,7 +455,7 @@ export const handlePaymentCallback = async (req, res) => {
 			}
 
 			return res.redirect(
-				`https://getameal-client.vercel.app/order-confirmed?orderId=${order._id}&status=failed&message=Amount+mismatch`,
+				`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=failed&message=Amount+mismatch`,
 			);
 		}
 
@@ -500,7 +500,7 @@ export const handlePaymentCallback = async (req, res) => {
 		}
 
 		return res.redirect(
-			`https://getameal-client.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Payment+verified`,
+			`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Payment+verified`,
 		);
 	} catch (error) {
 		console.error(
@@ -516,7 +516,7 @@ export const handlePaymentCallback = async (req, res) => {
 		}
 
 		return res.redirect(
-			`https://getameal-client.vercel.app/order-confirmed?status=failed&message=${encodeURIComponent(error.message)}`,
+			`https://getameal-web.vercel.app/order-confirmed?status=failed&message=${encodeURIComponent(error.message)}`,
 		);
 	}
 };
@@ -998,10 +998,10 @@ export const acceptOrderRequest = async (req, res) => {
 		await order.save();
 
 		// In acceptOrderRequest
-		const formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodeURIComponent(order.paymentLink)}`;
+		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodeURIComponent(order.paymentLink)}`;
 
 		// ✅ Create receipt URL for customer
-		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
 		// ✅ Send WhatsApp with payment link AND receipt URL
 		const whatsappMessage = `Hi ${order.customerName}! 🍽️
@@ -1257,11 +1257,11 @@ export const createCustomOrder = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
-		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
 		// ✅ Format payment link: hide Paystack URL behind our frontend
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
-		const formattedPaymentLink = `https://getameal-client.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}`;
+		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}`;
 
 		// Send WhatsApp to customer with formatted payment link
 		const whatsappMessage = `Hi ${customer.fullName}! 🍽️
@@ -1575,7 +1575,7 @@ export const createOrderFromCart = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
-		const receiptUrl = `https://getameal-client.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
 		// Send push notification to cook
 		await sendPushToUser(

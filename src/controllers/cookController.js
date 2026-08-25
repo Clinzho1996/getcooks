@@ -428,7 +428,7 @@ export const updateCookProfile = async (req, res) => {
 			}
 
 			updates.storeHandle = normalizedHandle;
-			updates.storeLink = `https://getameal-client.vercel.app/${normalizedHandle}`;
+			updates.storeLink = `https://getameal-web.vercel.app/${normalizedHandle}`;
 		}
 
 		// Update User model (only if provided)

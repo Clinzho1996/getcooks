@@ -488,7 +488,7 @@ export const signupComplete = async (req, res) => {
 			isApproved: false,
 			isAvailable: true,
 			walletBalance: 0,
-			storeLink: `https://getameal-client.vercel.app/${normalizedHandle}`,
+			storeLink: `https://getameal-web.vercel.app/${normalizedHandle}`,
 		});
 
 		const token = generateToken(user._id);
@@ -927,7 +927,7 @@ export const socialAuthOnboardingComplete = async (req, res) => {
 			isApproved: false,
 			isAvailable: true,
 			walletBalance: 0,
-			storeLink: `https://getameal-client.vercel.app/${normalizedHandle}`,
+			storeLink: `https://getameal-web.vercel.app/${normalizedHandle}`,
 		});
 
 		const token = generateToken(user._id);
@@ -1296,7 +1296,7 @@ export const checkStoreHandle = async (req, res) => {
 		res.status(200).json({
 			available: true,
 			message: "Store handle is available!",
-			storeLink: `https://getameal-client.vercel.app/${normalizedHandle}`,
+			storeLink: `https://getameal-web.vercel.app/${normalizedHandle}`,
 		});
 	} catch (error) {
 		res.status(500).json({
