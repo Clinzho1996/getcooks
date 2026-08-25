@@ -87,14 +87,20 @@ export const getStoreByHandle = async (req, res) => {
 			},
 		);
 
-		// ✅ Get products using the correct userId
+		// ✅ FIX: Get ALL products (including unavailable ones)
+		// Remove the isAvailable: true filter so all products are returned
 		const products = await Meal.find({
 			cookId: userId,
-			isAvailable: true,
 			status: "active",
 		}).sort({ createdAt: -1 });
 
 		console.log(`📦 Found ${products.length} products for store`);
+		console.log(
+			`   Available: ${products.filter((p) => p.isAvailable).length}`,
+		);
+		console.log(
+			`   Unavailable: ${products.filter((p) => !p.isAvailable).length}`,
+		);
 
 		// ✅ Build store info
 		const storeInfo = {
@@ -144,6 +150,7 @@ export const getStoreByHandle = async (req, res) => {
 				images: p.images,
 				isAvailable: p.isAvailable,
 				isAlwaysAvailable: p.isAlwaysAvailable,
+				ordersCount: p.ordersCount || 0,
 			})),
 		});
 	} catch (error) {
