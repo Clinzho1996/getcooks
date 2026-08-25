@@ -90,8 +90,6 @@ export const getMealReviews = async (req, res) => {
 	}
 };
 
-// ===== PUBLIC CREATE REVIEW (No Auth - uses phone number) =====
-
 export const createReview = async (req, res) => {
 	try {
 		const {
@@ -152,19 +150,49 @@ export const createReview = async (req, res) => {
 			}
 		}
 
+		// In the createReview controller
+
 		// ✅ Verify the customer has actually ordered from this cook
 		if (targetType === "cook") {
+			// Try to find the order with more flexible conditions
 			const hasOrdered = await Order.findOne({
 				cookId: cookUserId, // Use the user ID for order lookup
-				customerPhone: customerPhone.replace(/\D/g, ""),
+				customerPhone: {
+					$in: [
+						customerPhone.replace(/\D/g, ""), // Digits only
+						customerPhone, // Original format
+						`0${customerPhone.replace(/\D/g, "")}`, // With leading zero
+						customerPhone.replace(/\D/g, "").slice(-10), // Last 10 digits
+					],
+				},
 				paymentStatus: "paid",
-				status: { $in: ["delivered", "picked_up"] },
+				// ✅ Allow more statuses - not just delivered/picked_up
+				status: {
+					$in: [
+						"pending",
+						"confirmed",
+						"preparing",
+						"ready",
+						"delivered",
+						"picked_up",
+						"completed",
+					],
+				},
 			});
 
 			if (!hasOrdered) {
-				return res.status(403).json({
-					message: "You can only review cooks you have ordered from",
+				// If no order found, try to find by customer ID from the order
+				const orderByCustomer = await Order.findOne({
+					cookId: cookUserId,
+					customerPhone: customerPhone.replace(/\D/g, ""),
+					paymentStatus: "paid",
 				});
+
+				if (!orderByCustomer) {
+					return res.status(403).json({
+						message: "You can only review cooks you have ordered from",
+					});
+				}
 			}
 		}
 
