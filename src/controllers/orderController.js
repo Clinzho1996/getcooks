@@ -12,9 +12,7 @@ import { sendPushToUser } from "../services/pushService.js";
 import {
 	sendCustomOrderToCustomer,
 	sendNewOrderToCook,
-	sendOrderStatusUpdate,
 	sendPaymentConfirmationToCook,
-	sendWalletCreditToCook,
 } from "../utils/whatsappNotifications.js";
 
 // ============================================
@@ -581,287 +579,269 @@ export const getOrderDetails = async (req, res) => {
 	}
 };
 
-// controllers/orderController.js - Updated updateOrderStatus
-
-// controllers/orderController.js - Fixed updateOrderStatus
-
 export const updateOrderStatus = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const { orderId } = req.params;
-    const { status, sellerNote } = req.body;
+	try {
+		const userId = req.user._id;
+		const { orderId } = req.params;
+		const { status, sellerNote } = req.body;
 
-    if (!status) {
-      return res.status(400).json({ message: "Status is required" });
-    }
+		if (!status) {
+			return res.status(400).json({ message: "Status is required" });
+		}
 
-    const validStatuses = [
-      "pending",
-      "confirmed",
-      "delivered",
-      "picked_up",
-      "cancelled",
-    ];
+		// ✅ Add 'completed' to valid statuses
+		const validStatuses = [
+			"pending",
+			"confirmed",
+			"delivered",
+			"picked_up",
+			"completed", // ✅ Added
+			"cancelled",
+		];
 
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        message: `Invalid status. Allowed values: ${validStatuses.join(", ")}`,
-        received: status,
-      });
-    }
+		if (!validStatuses.includes(status)) {
+			return res.status(400).json({
+				message: `Invalid status. Allowed values: ${validStatuses.join(", ")}`,
+				received: status,
+			});
+		}
 
-    const order = await Order.findOne({
-      _id: orderId,
-      cookId: userId,
-    });
+		const order = await Order.findOne({
+			_id: orderId,
+			cookId: userId,
+		});
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
+		if (!order) {
+			return res.status(404).json({ message: "Order not found" });
+		}
 
-    // Check if order is paid before allowing completion
-    if (
-      (status === "delivered" || status === "picked_up") &&
-      order.paymentStatus !== "paid"
-    ) {
-      return res.status(400).json({
-        message: "Cannot complete order. Payment has not been confirmed.",
-        paymentStatus: order.paymentStatus,
-      });
-    }
+		// ✅ Check if order is paid before allowing completion
+		if (
+			(status === "delivered" ||
+				status === "picked_up" ||
+				status === "completed") &&
+			order.paymentStatus !== "paid"
+		) {
+			return res.status(400).json({
+				message: "Cannot complete order. Payment has not been confirmed.",
+				paymentStatus: order.paymentStatus,
+			});
+		}
 
-    const allowedTransitions = {
-      pending: ["confirmed", "cancelled"],
-      confirmed: ["delivered", "picked_up", "cancelled"],
-      delivered: [],
-      picked_up: [],
-      cancelled: [],
-    };
+		// ✅ Add 'completed' to transitions
+		const allowedTransitions = {
+			pending: ["confirmed", "cancelled"],
+			confirmed: ["delivered", "picked_up", "completed", "cancelled"],
+			delivered: [],
+			picked_up: [],
+			completed: [], // ✅ Added
+			cancelled: [],
+		};
 
-    const allowedNext = allowedTransitions[order.status] || [];
-    const isSameStatus = order.status === status;
-    const isAllowedTransition = allowedNext.includes(status);
+		const allowedNext = allowedTransitions[order.status] || [];
+		const isSameStatus = order.status === status;
+		const isAllowedTransition = allowedNext.includes(status);
 
-    if (!isAllowedTransition && !isSameStatus && allowedNext.length > 0) {
-      return res.status(400).json({
-        message: `Cannot transition from '${order.status}' to '${status}'`,
-        allowed: allowedNext,
-      });
-    }
+		if (!isAllowedTransition && !isSameStatus && allowedNext.length > 0) {
+			return res.status(400).json({
+				message: `Cannot transition from '${order.status}' to '${status}'`,
+				allowed: allowedNext,
+			});
+		}
 
-    // Delivery type validation
-    if (status === "delivered" && order.deliveryType !== "delivery") {
-      return res.status(400).json({
-        message: "delivered is only for delivery orders",
-        suggestion: "Use 'picked_up' for pickup orders",
-      });
-    }
+		// ✅ Include 'completed' in delivery type validation
+		if (
+			(status === "delivered" || status === "completed") &&
+			order.deliveryType !== "delivery"
+		) {
+			return res.status(400).json({
+				message: `${status} is only for delivery orders`,
+				suggestion: "Use 'picked_up' for pickup orders",
+			});
+		}
 
-    if (status === "picked_up" && order.deliveryType !== "pickup") {
-      return res.status(400).json({
-        message: "picked_up is only for pickup orders",
-        suggestion: "Use 'delivered' for delivery orders",
-      });
-    }
+		if (status === "picked_up" && order.deliveryType !== "pickup") {
+			return res.status(400).json({
+				message: "picked_up is only for pickup orders",
+				suggestion: "Use 'delivered' or 'completed' for delivery orders",
+			});
+		}
 
-    const oldStatus = order.status;
-    let cook = null;
-    let walletCredited = false;
-    let walletAmount = 0;
+		const oldStatus = order.status;
+		let cook = null;
+		let walletCredited = false;
+		let walletAmount = 0;
 
-    // ✅ CREDIT WALLET when order is delivered or picked up
-    const isCompletingOrder =
-      (status === "delivered" || status === "picked_up") &&
-      order.paymentStatus === "paid";
+		// ✅ CREDIT WALLET when order is delivered, picked_up, or completed
+		const isCompletingOrder =
+			(status === "delivered" ||
+				status === "picked_up" ||
+				status === "completed") &&
+			order.paymentStatus === "paid";
 
-    const isAlreadyCompleted =
-      (order.status === "delivered" || order.status === "picked_up") &&
-      order.paymentStatus === "paid";
+		const isAlreadyCompleted =
+			(order.status === "delivered" ||
+				order.status === "picked_up" ||
+				order.status === "completed") &&
+			order.paymentStatus === "paid";
 
-    if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
-      try {
-        // Check if already credited
-        let existingTransaction = null;
-        try {
-          existingTransaction = await WalletTransaction.findOne({
-            reference: order._id.toString(),
-            type: "credit",
-          });
-        } catch (txError) {
-          console.log("WalletTransaction model might not exist yet, creating...");
-        }
+		if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
+			try {
+				// Check if already credited
+				let existingTransaction = null;
+				try {
+					existingTransaction = await WalletTransaction.findOne({
+						reference: order._id.toString(),
+						type: "credit",
+					});
+				} catch (txError) {
+					console.log(
+						"WalletTransaction model might not exist yet, creating...",
+					);
+				}
 
-        if (!existingTransaction) {
-          // Calculate cook's earnings based on fee toggle
-          const feesAddedToCustomer = order.feesAddedToCustomer !== false;
-          let cookAmount = 0;
-          let platformFee = 0;
-          let paystackFeeDeducted = 0;
+				if (!existingTransaction) {
+					// Calculate cook's earnings based on fee toggle
+					const feesAddedToCustomer = order.feesAddedToCustomer !== false;
+					let cookAmount = 0;
+					let platformFee = 0;
+					let paystackFeeDeducted = 0;
 
-          if (feesAddedToCustomer) {
-            const platformFeeRate = 0.05;
-            platformFee = order.totalAmount * platformFeeRate;
-            cookAmount = Math.round((order.totalAmount - platformFee) * 100) / 100;
-            paystackFeeDeducted = 0;
-          } else {
-            const platformFeeRate = 0.05;
-            platformFee = order.subtotal * platformFeeRate;
-            const paystackFee = order.paystackFee || 0;
-            cookAmount = Math.round((order.totalAmount - platformFee - paystackFee) * 100) / 100;
-            paystackFeeDeducted = paystackFee;
-          }
+					if (feesAddedToCustomer) {
+						const platformFeeRate = 0.05;
+						platformFee = order.totalAmount * platformFeeRate;
+						cookAmount =
+							Math.round((order.totalAmount - platformFee) * 100) / 100;
+						paystackFeeDeducted = 0;
+					} else {
+						const platformFeeRate = 0.05;
+						platformFee = order.subtotal * platformFeeRate;
+						const paystackFee = order.paystackFee || 0;
+						cookAmount =
+							Math.round(
+								(order.totalAmount - platformFee - paystackFee) * 100,
+							) / 100;
+						paystackFeeDeducted = paystackFee;
+					}
 
-          if (cookAmount < 0) cookAmount = 0;
+					if (cookAmount < 0) cookAmount = 0;
 
-          // Find cook user
-          cook = await User.findById(order.cookId);
-          if (!cook) {
-            console.error(`Cook not found for order ${order._id}`);
-            return res.status(404).json({ message: "Cook not found" });
-          }
+					// Find cook user
+					cook = await User.findById(order.cookId);
+					if (!cook) {
+						console.error(`Cook not found for order ${order._id}`);
+						return res.status(404).json({ message: "Cook not found" });
+					}
 
-          // Update cook wallet
-          const previousBalance = cook.walletBalance || 0;
-          cook.walletBalance = Math.round((previousBalance + cookAmount) * 100) / 100;
-          await cook.save();
+					// Update cook wallet
+					const previousBalance = cook.walletBalance || 0;
+					cook.walletBalance =
+						Math.round((previousBalance + cookAmount) * 100) / 100;
+					await cook.save();
 
-          // Update CookProfile wallet
-          const cookProfile = await CookProfile.findOne({
-            userId: order.cookId,
-          });
-          if (cookProfile) {
-            cookProfile.walletBalance = Math.round((cookProfile.walletBalance || 0 + cookAmount) * 100) / 100;
-            await cookProfile.save();
-          }
+					// Update CookProfile wallet
+					const cookProfile = await CookProfile.findOne({
+						userId: order.cookId,
+					});
+					if (cookProfile) {
+						cookProfile.walletBalance =
+							Math.round((cookProfile.walletBalance || 0 + cookAmount) * 100) /
+							100;
+						await cookProfile.save();
+					}
 
-          // Increment ordersCount in CookProfile
-          await CookProfile.findOneAndUpdate(
-            { userId: order.cookId },
-            { $inc: { ordersCount: 1 } }
-          );
+					// Increment ordersCount in CookProfile
+					await CookProfile.findOneAndUpdate(
+						{ userId: order.cookId },
+						{ $inc: { ordersCount: 1 } },
+					);
 
-          // Create wallet transaction
-          try {
-            await WalletTransaction.create({
-              cookId: cook._id,
-              type: "credit",
-              amount: cookAmount,
-              reference: order._id.toString(),
-              description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
-              status: "success",
-            });
-          } catch (txError) {
-            console.error("Failed to create WalletTransaction:", txError.message);
-          }
+					// Create wallet transaction
+					try {
+						await WalletTransaction.create({
+							cookId: cook._id,
+							type: "credit",
+							amount: cookAmount,
+							reference: order._id.toString(),
+							description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
+							status: "success",
+						});
+					} catch (txError) {
+						console.error(
+							"Failed to create WalletTransaction:",
+							txError.message,
+						);
+					}
 
-          walletCredited = true;
-          walletAmount = cookAmount;
+					walletCredited = true;
+					walletAmount = cookAmount;
 
-          // ✅ Send WhatsApp notification to cook about wallet credit
-          try {
-            const cookProfileData = await CookProfile.findOne({ userId: order.cookId });
-            if (cookProfileData) {
-              await sendWalletCreditToCook(cookProfileData, order, walletAmount);
-            }
-          } catch (whatsappError) {
-            console.error("WhatsApp wallet credit error:", whatsappError.message);
-          }
+					console.log(
+						`💰 Cook ${cook._id} wallet credited with ₦${cookAmount.toFixed(2)}`,
+					);
+					console.log(`   Total: ₦${order.totalAmount.toFixed(2)}`);
+					console.log(`   Platform Fee (5%): ₦${platformFee.toFixed(2)}`);
+					console.log(
+						`   Paystack Fee Deducted: ₦${paystackFeeDeducted.toFixed(2)}`,
+					);
+					console.log(`   Fees added to customer: ${feesAddedToCustomer}`);
+				} else {
+					console.log(`Order ${order._id} already credited`);
+					walletCredited = true;
+					walletAmount = existingTransaction?.amount || 0;
+					cook = await User.findById(order.cookId);
+				}
+			} catch (error) {
+				console.error("Error crediting wallet:", error);
+			}
+		}
 
-          // Send push notification
-          try {
-            await sendPushToUser(
-              order.cookId,
-              "💰 Payment Received!",
-              `You earned ₦${cookAmount.toFixed(2)} from order #${order._id.toString().slice(-6)}`,
-              {
-                type: "wallet_credit",
-                orderId: order._id.toString(),
-                amount: cookAmount.toString(),
-                newBalance: cook.walletBalance.toString(),
-              }
-            );
-          } catch (pushError) {
-            console.error("Push error:", pushError.message);
-          }
+		// Update order status
+		if (oldStatus !== status) {
+			order.status = status;
+		}
+		if (sellerNote) order.sellerNote = sellerNote;
+		await order.save();
 
-          console.log(`💰 Cook ${cook._id} wallet credited with ₦${cookAmount.toFixed(2)}`);
-          console.log(`   Total: ₦${order.totalAmount.toFixed(2)}`);
-          console.log(`   Platform Fee (5%): ₦${platformFee.toFixed(2)}`);
-          console.log(`   Paystack Fee Deducted: ₦${paystackFeeDeducted.toFixed(2)}`);
-          console.log(`   Fees added to customer: ${feesAddedToCustomer}`);
-        } else {
-          console.log(`Order ${order._id} already credited`);
-          walletCredited = true;
-          walletAmount = existingTransaction?.amount || 0;
-          cook = await User.findById(order.cookId);
-        }
-      } catch (error) {
-        console.error("Error crediting wallet:", error);
-      }
-    }
+		// Fetch fresh cook data for accurate balance
+		if (!cook) {
+			cook = await User.findById(order.cookId);
+		}
+		const currentBalance = cook?.walletBalance || 0;
 
-    // ✅ Send order status update to customer (after wallet credit is calculated)
-    if (status === "delivered" || status === "picked_up") {
-      try {
-        const cookProfile = await CookProfile.findOne({ userId: order.cookId });
-        if (cookProfile) {
-          const customer = {
-            customerName: order.customerName,
-            customerPhone: order.customerPhone,
-          };
-          await sendOrderStatusUpdate(order, cookProfile, status);
-        }
-      } catch (whatsappError) {
-        console.error("WhatsApp status update error:", whatsappError.message);
-      }
-    }
+		// Get updated order with populated fields
+		const updatedOrder = await Order.findById(order._id)
+			.populate("customerId", "fullName phoneNumber email")
+			.populate("items.productId", "name images");
 
-    // Update order status
-    if (oldStatus !== status) {
-      order.status = status;
-    }
-    if (sellerNote) order.sellerNote = sellerNote;
-    await order.save();
-
-    // Fetch fresh cook data for accurate balance
-    if (!cook) {
-      cook = await User.findById(order.cookId);
-    }
-    const currentBalance = cook?.walletBalance || 0;
-
-    // Get updated order with populated fields
-    const updatedOrder = await Order.findById(order._id)
-      .populate("customerId", "fullName phoneNumber email")
-      .populate("items.productId", "name images");
-
-    res.json({
-      success: true,
-      message: `Order status updated from '${oldStatus}' to '${status}'`,
-      order: updatedOrder,
-      transition: {
-        from: oldStatus,
-        to: status,
-      },
-      wallet: walletCredited
-        ? {
-            credited: true,
-            amount: walletAmount,
-            newBalance: currentBalance,
-            message: `₦${walletAmount.toFixed(2)} credited to your wallet. New balance: ₦${currentBalance.toFixed(2)}`,
-          }
-        : {
-            credited: false,
-            currentBalance: currentBalance,
-            message: "No wallet credit applied.",
-          },
-    });
-  } catch (error) {
-    console.error("Update order status error:", error);
-    res.status(500).json({
-      message: "Failed to update order status",
-      error: error.message,
-    });
-  }
+		res.json({
+			success: true,
+			message: `Order status updated from '${oldStatus}' to '${status}'`,
+			order: updatedOrder,
+			transition: {
+				from: oldStatus,
+				to: status,
+			},
+			wallet: walletCredited
+				? {
+						credited: true,
+						amount: walletAmount,
+						newBalance: currentBalance,
+						message: `₦${walletAmount.toFixed(2)} credited to your wallet. New balance: ₦${currentBalance.toFixed(2)}`,
+					}
+				: {
+						credited: false,
+						currentBalance: currentBalance,
+						message: "No wallet credit applied.",
+					},
+		});
+	} catch (error) {
+		console.error("Update order status error:", error);
+		res.status(500).json({
+			message: "Failed to update order status",
+			error: error.message,
+		});
+	}
 };
 
 export const getOrderRequests = async (req, res) => {
