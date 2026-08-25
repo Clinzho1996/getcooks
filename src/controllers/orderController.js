@@ -1233,16 +1233,16 @@ export const createCustomOrder = async (req, res) => {
 
 		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
 
-		// ✅ Format payment link: hide Paystack URL behind our frontend
+		// ✅ Format payment link with phone number included
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
-		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}`;
+		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${order.customerPhone}`;
 
 		// Send WhatsApp to customer with formatted payment link
 		const whatsappMessage = `Hi ${customer.fullName}! 🍽️
 
 Your custom order has been created by ${cook.storeName}!
 
-📋 Order Details:
+Order Details:
 • Order: ${title}
 • Food Amount: ₦${amount.toFixed(2)}
 ${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}` : ""}
@@ -1250,9 +1250,9 @@ ${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}`
 • Ready: ${new Date(readyDate).toLocaleDateString()}
 • Time: ${readyTime || "12:00"}
 
-🔗 Pay here: ${formattedPaymentLink}
+Pay here: ${formattedPaymentLink}
 
-📱 View your receipt: ${receiptUrl}
+View your receipt: ${receiptUrl}
 
 Thank you for choosing ${cook.storeName}!`;
 
@@ -1273,7 +1273,7 @@ Thank you for choosing ${cook.storeName}!`;
 				totalAmount: order.totalAmount,
 				feesAddedToCustomer: order.feesAddedToCustomer,
 				status: order.status,
-				paymentLink: formattedPaymentLink, // ✅ Formatted payment link
+				paymentLink: formattedPaymentLink, // ✅ Formatted payment link with phone
 				rawPaymentLink: order.paymentLink, // ✅ Keep raw for reference if needed
 				receiptUrl: receiptUrl,
 				readyDate: order.readyDate,
