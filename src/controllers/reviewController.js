@@ -337,6 +337,57 @@ Keep up the great work! 🍽️`;
 	}
 };
 
+// controllers/reviewController.js - Add this new function
+
+// Get reviews for a cook by store handle (Public)
+export const getCookReviewsByHandle = async (req, res) => {
+	try {
+		const { storeHandle } = req.params;
+
+		// ✅ Find the cook profile by store handle
+		const cookProfile = await CookProfile.findOne({ 
+			storeHandle: { $regex: new RegExp(`^${storeHandle}$`, "i") } 
+		});
+		
+		if (!cookProfile) {
+			return res.status(404).json({
+				success: false,
+				message: "Cook not found",
+			});
+		}
+
+		const reviews = await Review.find({
+			targetId: cookProfile._id,
+			targetType: "cook",
+		}).sort({ createdAt: -1 });
+
+		const avg = reviews.length
+			? reviews.reduce((a, b) => a + b.rating, 0) / reviews.length
+			: 0;
+
+		res.json({
+			success: true,
+			averageRating: Math.round(avg * 10) / 10,
+			total: reviews.length,
+			storeName: cookProfile.storeName,
+			storeHandle: cookProfile.storeHandle,
+			profileImage: cookProfile.profileImage,
+			reviews: reviews.map((r) => ({
+				id: r._id,
+				rating: r.rating,
+				comment: r.comment,
+				customerName: r.customerName || "Anonymous",
+				createdAt: r.createdAt,
+			})),
+		});
+	} catch (error) {
+		console.error("Get cook reviews by handle error:", error);
+		res.status(500).json({
+			message: error.message,
+		});
+	}
+};
+
 // Update Review (Public - uses phone number)
 export const updateReview = async (req, res) => {
 	try {
