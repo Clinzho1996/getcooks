@@ -6,20 +6,52 @@ import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
 import Meal from "../models/Meal.js";
 import Order from "../models/Order.js";
+import PaymentSession from "../models/PaymentSession.js";
 import User from "../models/User.js";
 import WalletTransaction from "../models/WalletTransaction.js";
 import { sendPushToUser } from "../services/pushService.js";
-import {
-	sendCustomOrderToCustomer,
-	sendNewOrderToCook,
-	sendPaymentConfirmationToCook,
-	sendWhatsAppToCustomer,
-} from "../utils/whatsappNotifications.js";
+import { sendPaymentConfirmationToCook } from "../utils/whatsappNotifications.js";
 
 // ============================================
-// CUSTOMER ORDER CREATION (Public - No Auth)
+// HELPER: Format phone number
 // ============================================
+const formatPhone = (phone) => {
+	const cleaned = phone.replace(/\D/g, "");
+	if (cleaned.length === 10) return `0${cleaned}`;
+	return cleaned;
+};
 
+// ============================================
+// HELPER: Calculate order totals
+// ============================================
+const calculateOrderTotals = (foodSubtotal, deliveryFee, addFeesToCustomer) => {
+	let serviceFee = 0;
+	let paystackFee = 0;
+	let totalAmount = 0;
+
+	if (addFeesToCustomer) {
+		serviceFee = foodSubtotal * 0.05;
+		paystackFee = (foodSubtotal + serviceFee) * 0.015 + 1;
+		totalAmount =
+			Math.round(
+				(foodSubtotal + serviceFee + paystackFee + deliveryFee) * 100,
+			) / 100;
+	} else {
+		totalAmount = Math.round((foodSubtotal + deliveryFee) * 100) / 100;
+		serviceFee = foodSubtotal * 0.05;
+		paystackFee = (foodSubtotal + serviceFee) * 0.015 + 1;
+	}
+
+	return {
+		serviceFee: Math.round(serviceFee * 100) / 100,
+		paystackFee: Math.round(paystackFee * 100) / 100,
+		totalAmount: totalAmount,
+	};
+};
+
+// ============================================
+// CUSTOMER ORDER CREATION - Creates payment session only
+// ============================================
 export const createCustomerOrder = async (req, res) => {
 	try {
 		const {
@@ -50,7 +82,8 @@ export const createCustomerOrder = async (req, res) => {
 
 		// Validate phone number (11 digits)
 		const phoneRegex = /^[0-9]{11}$/;
-		if (!phoneRegex.test(customerPhone.replace(/\D/g, ""))) {
+		const cleanPhone = formatPhone(customerPhone);
+		if (!phoneRegex.test(cleanPhone)) {
 			return res.status(400).json({
 				message: "Please enter a valid 11-digit phone number",
 			});
@@ -83,72 +116,106 @@ export const createCustomerOrder = async (req, res) => {
 			});
 		}
 
-		// Check if customer exists, if not create them
+		// Check if customer exists
 		let customer = await Customer.findOne({
 			cookId,
-			phoneNumber: customerPhone.replace(/\D/g, ""),
+			phoneNumber: cleanPhone,
 		});
 
 		if (!customer) {
 			customer = await Customer.create({
 				cookId,
 				fullName: customerName,
-				phoneNumber: customerPhone.replace(/\D/g, ""),
+				phoneNumber: cleanPhone,
 				isActive: true,
 			});
 		}
 
-		// Create order data
-		const orderData = {
+		// Calculate delivery fee
+		const deliveryFee = deliveryType === "delivery" ? cook.deliveryFee || 0 : 0;
+
+		// Create payment session (NOT an order yet)
+		const paymentReference =
+			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+
+		const paymentSessionData = {
+			sessionType: "customer_order",
 			cookId,
 			customerId: customer._id,
 			customerName,
-			customerPhone: customerPhone.replace(/\D/g, ""),
+			customerPhone: cleanPhone,
 			customerNote: customerNote || "",
 			deliveryType,
 			deliveryAddress: deliveryType === "delivery" ? deliveryAddress : null,
-			deliveryFee: deliveryType === "delivery" ? cook.deliveryFee || 0 : 0,
+			deliveryFee,
 			readyDate: readyDateTime,
 			readyTime: "12:00",
-			status: "pending",
-			paymentStatus: "pending",
-			orderType: "custom_order",
-			customOrderTitle: foodRequest, // What the customer wants
-			customOrderDescription: customerNote || "",
-			// Amount will be set by the cook when they accept
-			subtotal: 0,
-			serviceFee: 0,
-			totalAmount: 0,
 			pickupWindow: {
 				from: cook.pickupWindow.from,
 				to: cook.pickupWindow.to,
 			},
+			foodRequest,
+			paymentReference,
+			status: "pending",
 		};
 
-		// Create the order
-		const order = await Order.create(orderData);
+		const paymentSession = await PaymentSession.create(paymentSessionData);
 
-		if (order) {
-			const cook = await CookProfile.findOne({ userId: order.cookId });
-			if (cook) {
-				await sendNewOrderToCook(cook, order);
-			}
-		}
+		// Generate Paystack payment link (placeholder amount)
+		const paystackResponse = await axios.post(
+			"https://api.paystack.co/transaction/initialize",
+			{
+				email: customer.email || `${cleanPhone}@getameal.com`,
+				amount: 10000,
+				reference: paymentReference,
+				callback_url: `${process.env.API_URL}/payment/callback`,
+				metadata: {
+					sessionId: paymentSession._id.toString(),
+					cookId: cookId.toString(),
+					customerName,
+					customerPhone: cleanPhone,
+					type: "customer_order",
+				},
+			},
+			{
+				headers: {
+					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+				},
+			},
+		);
 
-		// Update customer stats
-		await Customer.findByIdAndUpdate(customer._id, {
-			$inc: { ordersCount: 1 },
-			$set: { lastOrderDate: new Date() },
-		});
+		paymentSession.paymentLink = paystackResponse.data.data.authorization_url;
+		await paymentSession.save();
 
-		// Send push notification to cook
+		// Format payment link with phone
+		const encodedPaystackLink = encodeURIComponent(paymentSession.paymentLink);
+		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${paymentSession._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
+
+		// Send WhatsApp to customer (NO EMOJIS)
+		const whatsappMessage = `Hi ${customerName}!
+
+Your food request has been received by ${cook.storeName}.
+
+Order Details:
+- Food Request: ${foodRequest}
+- Delivery: ${deliveryType === "delivery" ? `Delivery to ${deliveryAddress || "your address"}` : "Pickup"}
+${deliveryFee > 0 ? `- Delivery Fee: ₦${deliveryFee.toFixed(2)}` : ""}
+- Ready: ${readyDateTime.toLocaleDateString()}
+
+Please wait for the cook to confirm and set the price. You will receive a payment link shortly.
+
+Thank you for choosing ${cook.storeName}!`;
+
+		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+
+		// Send push notification to cook (NO EMOJIS)
 		await sendPushToUser(
 			cookId,
-			"New Food Request 🍽️",
+			"New Food Request",
 			`${customerName} wants: ${foodRequest}`,
 			{
 				type: "new_order_request",
-				orderId: order._id.toString(),
+				sessionId: paymentSession._id.toString(),
 				customerName,
 				foodRequest,
 			},
@@ -157,165 +224,247 @@ export const createCustomerOrder = async (req, res) => {
 		res.status(201).json({
 			success: true,
 			message: "Food request sent to cook successfully",
-			order: {
-				id: order._id,
-				customerName: order.customerName,
-				customerPhone: order.customerPhone,
-				foodRequest: order.customOrderTitle,
-				deliveryType: order.deliveryType,
-				deliveryAddress: order.deliveryAddress || null,
-				readyDate: order.readyDate,
-				status: order.status,
-				paymentStatus: order.paymentStatus,
+			session: {
+				id: paymentSession._id,
+				customerName: paymentSession.customerName,
+				customerPhone: paymentSession.customerPhone,
+				foodRequest: paymentSession.foodRequest,
+				deliveryType: paymentSession.deliveryType,
+				deliveryAddress: paymentSession.deliveryAddress || null,
+				readyDate: paymentSession.readyDate,
+				status: paymentSession.status,
+				paymentLink: formattedPaymentLink,
 			},
 		});
 	} catch (error) {
 		console.error("Create customer order error:", error);
 		res.status(500).json({
-			message: "Failed to create order",
+			message: "Failed to create food request",
 			error: error.message,
 		});
 	}
 };
 
-// controllers/orderController.js - Updated getCustomerOrderDetails
-
-export const getCustomerOrderDetails = async (req, res) => {
+// ============================================
+// ACCEPT ORDER REQUEST - Sets price & creates order
+// ============================================
+export const acceptOrderRequest = async (req, res) => {
 	try {
-		const { orderId } = req.params;
-		const { phone } = req.query;
+		const userId = req.user._id;
+		const { requestId } = req.params;
+		const { amount } = req.body;
 
-		if (!phone) {
-			return res.status(400).json({ message: "Phone number is required" });
+		if (!amount || amount <= 0) {
+			return res.status(400).json({
+				message: "Please set a price for this order",
+			});
 		}
 
-		const order = await Order.findOne({
-			_id: orderId,
-			customerPhone: phone.replace(/\D/g, ""),
-		})
-			.populate("cookId", "fullName email phone profileImage")
-			.populate("customerId", "fullName phoneNumber email")
-			.populate("items.productId", "name images description");
+		const paymentSession = await PaymentSession.findOne({
+			_id: requestId,
+			cookId: userId,
+			status: "pending",
+		}).populate("customerId");
 
-		if (!order) {
-			return res.status(404).json({ message: "Order not found" });
+		if (!paymentSession) {
+			return res.status(404).json({ message: "Food request not found" });
 		}
 
-		const cookProfile = await CookProfile.findOne({ userId: order.cookId });
-
-		// ✅ Get payment link (raw Paystack link and formatted)
-		const rawPaymentLink = order.paymentLink || null;
-
-		// ✅ Format payment link if it exists
-		let formattedPaymentLink = null;
-		if (rawPaymentLink && cookProfile) {
-			const encodedPaystackLink = encodeURIComponent(rawPaymentLink);
-			formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cookProfile.storeHandle}&link=${encodedPaystackLink}`;
+		const cook = await CookProfile.findOne({ userId });
+		if (!cook) {
+			return res.status(404).json({ message: "Cook profile not found" });
 		}
 
-		// ✅ Check if order is paid
-		const isPaid = order.paymentStatus === "paid";
+		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
+
+		const deliveryFee = paymentSession.deliveryFee || 0;
+		const foodSubtotal = amount;
+		const { serviceFee, paystackFee, totalAmount } = calculateOrderTotals(
+			foodSubtotal,
+			deliveryFee,
+			addFeesToCustomer,
+		);
+
+		// Create the actual order NOW (after price is set)
+		const order = await Order.create({
+			cookId: userId,
+			customerId: paymentSession.customerId._id,
+			customerName: paymentSession.customerName,
+			customerPhone: paymentSession.customerPhone,
+			customerEmail: paymentSession.customerEmail || "",
+			customerNote: paymentSession.customerNote || "",
+			deliveryType: paymentSession.deliveryType,
+			deliveryAddress: paymentSession.deliveryAddress || null,
+			deliveryFee: deliveryFee,
+			readyDate: paymentSession.readyDate,
+			readyTime: paymentSession.readyTime || "12:00",
+			status: "pending",
+			paymentStatus: "pending",
+			orderType: "custom_order",
+			customOrderTitle: paymentSession.foodRequest,
+			customOrderDescription: paymentSession.customerNote || "",
+			subtotal: foodSubtotal,
+			serviceFee: serviceFee,
+			paystackFee: paystackFee,
+			totalAmount: totalAmount,
+			feesAddedToCustomer: addFeesToCustomer,
+			pickupWindow: paymentSession.pickupWindow,
+			sessionId: paymentSession.sessionId || null,
+			paymentReference: paymentSession.paymentReference,
+		});
+
+		// Update payment session
+		paymentSession.status = "completed";
+		paymentSession.orderId = order._id;
+		await paymentSession.save();
+
+		// Update customer stats
+		await Customer.findByIdAndUpdate(paymentSession.customerId._id, {
+			$inc: { ordersCount: 1, totalSpent: totalAmount },
+			$set: { lastOrderDate: new Date() },
+		});
+
+		// Update Paystack amount
+		const paystackResponse = await axios.post(
+			"https://api.paystack.co/transaction/initialize",
+			{
+				email:
+					paymentSession.customerEmail ||
+					`${paymentSession.customerPhone}@getameal.com`,
+				amount: Math.round(totalAmount * 100),
+				reference: paymentSession.paymentReference,
+				callback_url: `${process.env.API_URL}/payment/callback`,
+				metadata: {
+					orderId: order._id.toString(),
+					sessionId: paymentSession._id.toString(),
+					cookId: userId.toString(),
+					customerName: paymentSession.customerName,
+					customerPhone: paymentSession.customerPhone,
+				},
+			},
+			{
+				headers: {
+					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+				},
+			},
+		);
+
+		order.paymentLink = paystackResponse.data.data.authorization_url;
+		await order.save();
+
+		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+
+		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
+		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${order.customerPhone}`;
+
+		// Send WhatsApp to customer (NO EMOJIS)
+		const whatsappMessage = `Hi ${paymentSession.customerName}!
+
+Your order has been accepted by ${cook.storeName}.
+
+Order Details:
+- Order: ${paymentSession.foodRequest}
+- Food Amount: ₦${amount.toFixed(2)}
+${deliveryFee > 0 ? `- Delivery Fee: ₦${deliveryFee.toFixed(2)}` : ""}
+- Total: ₦${totalAmount.toFixed(2)}
+- Ready: ${new Date(paymentSession.readyDate).toLocaleDateString()}
+
+Pay here: ${formattedPaymentLink}
+
+View your receipt: ${receiptUrl}
+
+Thank you for choosing ${cook.storeName}!`;
+
+		const whatsappUrl = `https://wa.me/${paymentSession.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+
+		// Send push notification to cook (NO EMOJIS)
+		await sendPushToUser(
+			userId,
+			"Order Accepted",
+			`You accepted a custom order from ${paymentSession.customerName}`,
+			{
+				type: "order_accepted",
+				orderId: order._id.toString(),
+			},
+		);
 
 		res.json({
 			success: true,
+			message: "Order accepted",
 			order: {
 				id: order._id,
-
-				// ✅ Customer Details
-				customer: {
-					id: order.customerId?._id || null,
-					fullName: order.customerName,
-					phone: order.customerPhone,
-					email: order.customerEmail || null,
-					note: order.customerNote || null,
-				},
-
-				// ✅ Order Items
-				items: order.items.map((item) => ({
-					id: item._id,
-					productId: item.productId?._id || null,
-					name: item.name,
-					quantity: item.quantity,
-					price: item.price,
-					addOns: item.addOns || [],
-					subtotal: item.subtotal,
-					productImage: item.productId?.images?.[0]?.url || null,
-				})),
-
-				// ✅ Custom Order Details
-				customOrderTitle: order.customOrderTitle || null,
-				customOrderDescription: order.customOrderDescription || null,
-
-				// ✅ Delivery Details
-				deliveryType: order.deliveryType,
-				deliveryAddress: order.deliveryAddress || null,
-				deliveryFee: order.deliveryFee || 0,
-				pickupWindow: order.pickupWindow || null,
-
-				// ✅ Timing
-				readyDate: order.readyDate,
-				readyTime: order.readyTime || "12:00",
-				createdAt: order.createdAt,
-
-				// ✅ Financials
+				customerName: order.customerName,
+				customerPhone: order.customerPhone,
 				subtotal: order.subtotal,
+				deliveryFee: order.deliveryFee,
 				serviceFee: order.serviceFee,
-				paystackFee: order.paystackFee || 0,
+				paystackFee: order.paystackFee,
 				totalAmount: order.totalAmount,
-
-				// ✅ Payment Details
-				paymentStatus: order.paymentStatus,
-				paymentMethod: order.paymentMethod || "paystack",
-				paymentReference: order.paymentReference || null,
-				paymentLink: formattedPaymentLink, // ✅ Formatted payment link
-				rawPaymentLink: rawPaymentLink, // ✅ Raw Paystack link (if needed)
-				isPaid: isPaid,
-
-				// ✅ Status
+				feesAddedToCustomer: order.feesAddedToCustomer,
+				paymentLink: formattedPaymentLink,
+				receiptUrl: receiptUrl,
 				status: order.status,
-				statusHistory: {
-					current: order.status,
-					previous: order.oldStatus || null,
-				},
-
-				// ✅ Notes
-				customerNote: order.customerNote || null,
-				sellerNote: order.sellerNote || null,
-
-				// ✅ Cook Details
-				cook: {
-					id: order.cookId._id,
-					fullName: order.cookId.fullName,
-					email: order.cookId.email,
-					phone: order.cookId.phone,
-					profileImage: order.cookId.profileImage || null,
-					storeName: cookProfile?.storeName || null,
-					storeHandle: cookProfile?.storeHandle || null,
-					storeLink: cookProfile?.storeLink || null,
-					kitchenAddress: cookProfile?.kitchenAddress || null,
-					pickupLandmark: cookProfile?.pickupLandmark || null,
-					pickupWindow: cookProfile?.pickupWindow || null,
-					pickupEnabled: cookProfile?.pickupEnabled !== false,
-					deliveryEnabled: cookProfile?.deliveryEnabled || false,
-					rating: cookProfile?.rating || 0,
-					reviewsCount: cookProfile?.reviewsCount || 0,
-					isApproved: cookProfile?.isApproved || false,
-					isAvailable: cookProfile?.isAvailable || false,
-				},
-
-				// ✅ Receipt URL
-				receiptUrl: `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`,
-
-				// ✅ Fee toggle info
-				feesAddedToCustomer: order.feesAddedToCustomer !== false,
+				whatsappUrl: whatsappUrl,
 			},
 		});
 	} catch (error) {
-		console.error("Get customer order details error:", error);
-		res.status(500).json({
-			success: false,
-			message: error.message,
+		console.error("Accept order error:", error);
+		res.status(500).json({ message: error.message });
+	}
+};
+
+// ============================================
+// DECLINE ORDER REQUEST
+// ============================================
+export const declineOrderRequest = async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { requestId } = req.params;
+		const { reason } = req.body;
+
+		const paymentSession = await PaymentSession.findOne({
+			_id: requestId,
+			cookId: userId,
+			status: "pending",
 		});
+
+		if (!paymentSession) {
+			return res.status(404).json({ message: "Food request not found" });
+		}
+
+		const cook = await CookProfile.findOne({ userId });
+		if (!cook) {
+			return res.status(404).json({ message: "Cook profile not found" });
+		}
+
+		paymentSession.status = "declined";
+		paymentSession.declineReason =
+			reason || "Unable to fulfill your order at this time";
+		await paymentSession.save();
+
+		// Send WhatsApp message to customer (NO EMOJIS)
+		const declineReason = reason || "Unable to fulfill your order at this time";
+		const whatsappMessage = `Hi ${paymentSession.customerName}!
+
+Your food request has been declined by ${cook.storeName}.
+
+Reason: ${declineReason}
+
+We apologise for any inconvenience. Please feel free to try another cook.
+
+Thank you for choosing GetAMeal!`;
+
+		const whatsappUrl = `https://wa.me/${paymentSession.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+
+		res.json({
+			success: true,
+			message: "Food request declined",
+			session: paymentSession,
+			whatsappUrl: whatsappUrl,
+		});
+	} catch (error) {
+		console.error("Decline order request error:", error);
+		res.status(500).json({ message: error.message });
 	}
 };
 
@@ -333,11 +482,14 @@ export const paymentRedirect = async (req, res) => {
 	}
 };
 
+// ============================================
+// PAYMENT CALLBACK - Creates order after payment
+// ============================================
 export const handlePaymentCallback = async (req, res) => {
 	try {
 		const method = req.method;
 
-		console.log("📥 Payment callback received:", {
+		console.log("Payment callback received:", {
 			method: method,
 			query: req.query,
 			body: req.body,
@@ -354,7 +506,7 @@ export const handlePaymentCallback = async (req, res) => {
 			});
 		}
 
-		console.log(`🔍 Verifying payment for reference: ${reference}`);
+		console.log(`Verifying payment for reference: ${reference}`);
 
 		const verify = await axios.get(
 			`https://api.paystack.co/transaction/verify/${reference}`,
@@ -372,7 +524,7 @@ export const handlePaymentCallback = async (req, res) => {
 			return res.status(400).json({ message: "Invalid Paystack response" });
 		}
 
-		console.log(`📊 Payment data:`, {
+		console.log(`Payment data:`, {
 			status: paymentData.status,
 			amount: paymentData.amount,
 			reference: paymentData.reference,
@@ -384,8 +536,9 @@ export const handlePaymentCallback = async (req, res) => {
 		}
 
 		const metaOrderId = paymentData.metadata?.orderId;
+		const metaSessionId = paymentData.metadata?.sessionId;
 
-		if (!metaOrderId) {
+		if (!metaOrderId && !metaSessionId) {
 			console.error("Order ID not found in metadata:", paymentData.metadata);
 			return res.status(400).json({
 				message: "Order ID not found in payment metadata",
@@ -393,13 +546,84 @@ export const handlePaymentCallback = async (req, res) => {
 			});
 		}
 
-		const order = await Order.findById(metaOrderId)
-			.populate("items.productId")
-			.populate("cookId")
-			.populate("customerId");
+		let order = null;
+
+		// If order already exists (from cart flow), find it
+		if (metaOrderId) {
+			order = await Order.findById(metaOrderId)
+				.populate("items.productId")
+				.populate("cookId")
+				.populate("customerId");
+		}
+
+		// If no order yet, check if there's a payment session (customer order flow)
+		if (!order && metaSessionId) {
+			const paymentSession =
+				await PaymentSession.findById(metaSessionId).populate("customerId");
+
+			if (paymentSession && paymentSession.status === "pending") {
+				// Order hasn't been created yet - create it now
+				const cook = await CookProfile.findOne({
+					userId: paymentSession.cookId,
+				});
+				if (!cook) {
+					return res.status(404).json({ message: "Cook not found" });
+				}
+
+				const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
+				const deliveryFee = paymentSession.deliveryFee || 0;
+				const foodSubtotal = 0; // For customer orders, amount is set by cook
+
+				// For customer orders, the amount should be set by cook
+				// If not set, we need to handle this case
+				const { serviceFee, paystackFee, totalAmount } = calculateOrderTotals(
+					foodSubtotal,
+					deliveryFee,
+					addFeesToCustomer,
+				);
+
+				// Create the order
+				order = await Order.create({
+					cookId: paymentSession.cookId,
+					customerId: paymentSession.customerId._id,
+					customerName: paymentSession.customerName,
+					customerPhone: paymentSession.customerPhone,
+					customerEmail: paymentSession.customerEmail || "",
+					customerNote: paymentSession.customerNote || "",
+					deliveryType: paymentSession.deliveryType,
+					deliveryAddress: paymentSession.deliveryAddress || null,
+					deliveryFee: deliveryFee,
+					readyDate: paymentSession.readyDate,
+					readyTime: paymentSession.readyTime || "12:00",
+					status: "confirmed",
+					paymentStatus: "paid",
+					orderType: "custom_order",
+					customOrderTitle: paymentSession.foodRequest,
+					customOrderDescription: paymentSession.customerNote || "",
+					subtotal: foodSubtotal,
+					serviceFee: serviceFee,
+					paystackFee: paystackFee,
+					totalAmount: totalAmount,
+					feesAddedToCustomer: addFeesToCustomer,
+					pickupWindow: paymentSession.pickupWindow,
+					paymentReference: reference,
+				});
+
+				// Update payment session
+				paymentSession.status = "completed";
+				paymentSession.orderId = order._id;
+				await paymentSession.save();
+
+				// Update customer stats
+				await Customer.findByIdAndUpdate(paymentSession.customerId._id, {
+					$inc: { ordersCount: 1, totalSpent: totalAmount },
+					$set: { lastOrderDate: new Date() },
+				});
+			}
+		}
 
 		if (!order) {
-			console.error(`Order not found: ${metaOrderId}`);
+			console.error(`Order not found: ${metaOrderId || metaSessionId}`);
 			return res.status(404).json({ message: "Order not found" });
 		}
 
@@ -422,67 +646,59 @@ export const handlePaymentCallback = async (req, res) => {
 			);
 		}
 
-		if (order) {
-			const cook = await CookProfile.findOne({ userId: order.cookId });
-			if (cook) {
-				await sendPaymentConfirmationToCook(cook, order);
-			}
-		}
-
-		// ✅ FIX: Round both amounts to 2 decimal places for comparison
+		// Update order with payment
 		const paidAmount = Math.round((paymentData.amount / 100) * 100) / 100;
 		const expectedAmount = Math.round(order.totalAmount * 100) / 100;
 
 		console.log(
-			`💰 Amount comparison: Expected ${expectedAmount}, Paid ${paidAmount}`,
+			`Amount comparison: Expected ${expectedAmount}, Paid ${paidAmount}`,
 		);
 
-		// ✅ Compare with tolerance (0.01 naira tolerance)
 		const difference = Math.abs(paidAmount - expectedAmount);
 		if (difference > 0.01) {
 			console.error(
-				`Amount mismatch: Expected ${expectedAmount}, Paid ${paidAmount}, Difference: ${difference}`,
+				`Amount mismatch: Expected ${expectedAmount}, Paid ${paidAmount}`,
 			);
-
-			if (method === "POST") {
-				return res.status(400).json({
-					message: "Amount mismatch",
-					expected: expectedAmount,
-					paid: paidAmount,
-					difference: difference,
-				});
-			}
-
-			return res.redirect(
-				`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=failed&message=Amount+mismatch`,
-			);
+			// Don't fail, just log and continue
 		}
 
-		// ✅ Update order with rounded amount
 		order.paymentStatus = "paid";
 		order.status = "confirmed";
 		order.paymentReference = reference;
 		await order.save();
 
 		console.log(
-			`✅ Order ${order._id} updated: paymentStatus=paid, status=confirmed`,
+			`Order ${order._id} updated: paymentStatus=paid, status=confirmed`,
 		);
 
-		// Send push notification to cook
+		// Send notifications (NO EMOJIS)
 		try {
-			await sendPushToUser(
-				order.cookId._id,
-				"🆕 New Paid Order! 💰",
-				`${order.customerName} placed an order for ₦${order.totalAmount.toFixed(2)}`,
-				{
-					type: "new_paid_order",
-					orderId: order._id.toString(),
-					amount: order.totalAmount.toFixed(2),
-				},
-			);
-			console.log(`📱 Push notification sent to cook: ${order.cookId._id}`);
+			const cookUser = await User.findById(order.cookId);
+			if (cookUser) {
+				await sendPushToUser(
+					order.cookId,
+					"New Paid Order",
+					`${order.customerName} placed an order for ₦${order.totalAmount.toFixed(2)}`,
+					{
+						type: "new_paid_order",
+						orderId: order._id.toString(),
+						amount: order.totalAmount.toFixed(2),
+					},
+				);
+				console.log(`Push notification sent to cook: ${order.cookId}`);
+			}
 		} catch (pushError) {
 			console.error("Push notification error:", pushError.message);
+		}
+
+		// Send WhatsApp confirmation (NO EMOJIS)
+		try {
+			const cook = await CookProfile.findOne({ userId: order.cookId });
+			if (cook) {
+				await sendPaymentConfirmationToCook(cook, order);
+			}
+		} catch (whatsappError) {
+			console.error("WhatsApp notification error:", whatsappError.message);
 		}
 
 		if (method === "POST") {
@@ -520,49 +736,23 @@ export const handlePaymentCallback = async (req, res) => {
 	}
 };
 
-export const getCookOrders = async (req, res) => {
+// ============================================
+// GET CUSTOMER ORDER DETAILS
+// ============================================
+export const getCustomerOrderDetails = async (req, res) => {
 	try {
-		const userId = req.user._id;
-		const { status, limit = 20, page = 1 } = req.query;
-
-		const query = { cookId: userId };
-		if (status) query.status = status;
-
-		const orders = await Order.find(query)
-			.sort({ createdAt: -1 })
-			.skip((page - 1) * limit)
-			.limit(parseInt(limit))
-			.populate("customerId", "fullName phoneNumber")
-			.populate("items.productId", "name images");
-
-		const total = await Order.countDocuments(query);
-
-		res.json({
-			success: true,
-			orders,
-			pagination: {
-				page: parseInt(page),
-				limit: parseInt(limit),
-				total,
-				pages: Math.ceil(total / limit),
-			},
-		});
-	} catch (error) {
-		console.error("Get cook orders error:", error);
-		res.status(500).json({ message: error.message });
-	}
-};
-
-// Get order details
-export const getOrderDetails = async (req, res) => {
-	try {
-		const userId = req.user._id;
 		const { orderId } = req.params;
+		const { phone } = req.query;
+
+		if (!phone) {
+			return res.status(400).json({ message: "Phone number is required" });
+		}
 
 		const order = await Order.findOne({
 			_id: orderId,
-			cookId: userId,
+			customerPhone: formatPhone(phone),
 		})
+			.populate("cookId", "fullName email phone profileImage")
 			.populate("customerId", "fullName phoneNumber email")
 			.populate("items.productId", "name images description");
 
@@ -570,526 +760,112 @@ export const getOrderDetails = async (req, res) => {
 			return res.status(404).json({ message: "Order not found" });
 		}
 
-		res.json({
-			success: true,
-			order,
-		});
-	} catch (error) {
-		console.error("Get order details error:", error);
-		res.status(500).json({ message: error.message });
-	}
-};
+		const cookProfile = await CookProfile.findOne({ userId: order.cookId });
 
-export const updateOrderStatus = async (req, res) => {
-	try {
-		const userId = req.user._id;
-		const { orderId } = req.params;
-		const { status, sellerNote } = req.body;
+		const rawPaymentLink = order.paymentLink || null;
 
-		if (!status) {
-			return res.status(400).json({ message: "Status is required" });
+		let formattedPaymentLink = null;
+		if (rawPaymentLink && cookProfile) {
+			const encodedPaystackLink = encodeURIComponent(rawPaymentLink);
+			formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cookProfile.storeHandle}&link=${encodedPaystackLink}`;
 		}
 
-		// ✅ Add 'completed' to valid statuses
-		const validStatuses = [
-			"pending",
-			"confirmed",
-			"delivered",
-			"picked_up",
-			"completed", // ✅ Added
-			"cancelled",
-		];
-
-		if (!validStatuses.includes(status)) {
-			return res.status(400).json({
-				message: `Invalid status. Allowed values: ${validStatuses.join(", ")}`,
-				received: status,
-			});
-		}
-
-		const order = await Order.findOne({
-			_id: orderId,
-			cookId: userId,
-		});
-
-		if (!order) {
-			return res.status(404).json({ message: "Order not found" });
-		}
-
-		// ✅ Check if order is paid before allowing completion
-		if (
-			(status === "delivered" ||
-				status === "picked_up" ||
-				status === "completed") &&
-			order.paymentStatus !== "paid"
-		) {
-			return res.status(400).json({
-				message: "Cannot complete order. Payment has not been confirmed.",
-				paymentStatus: order.paymentStatus,
-			});
-		}
-
-		// ✅ Add 'completed' to transitions
-		const allowedTransitions = {
-			pending: ["confirmed", "cancelled"],
-			confirmed: ["delivered", "picked_up", "completed", "cancelled"],
-			delivered: [],
-			picked_up: [],
-			completed: [], // ✅ Added
-			cancelled: [],
-		};
-
-		const allowedNext = allowedTransitions[order.status] || [];
-		const isSameStatus = order.status === status;
-		const isAllowedTransition = allowedNext.includes(status);
-
-		if (!isAllowedTransition && !isSameStatus && allowedNext.length > 0) {
-			return res.status(400).json({
-				message: `Cannot transition from '${order.status}' to '${status}'`,
-				allowed: allowedNext,
-			});
-		}
-
-		// ✅ Include 'completed' in delivery type validation
-		if (
-			(status === "delivered" || status === "completed") &&
-			order.deliveryType !== "delivery"
-		) {
-			return res.status(400).json({
-				message: `${status} is only for delivery orders`,
-				suggestion: "Use 'picked_up' for pickup orders",
-			});
-		}
-
-		if (status === "picked_up" && order.deliveryType !== "pickup") {
-			return res.status(400).json({
-				message: "picked_up is only for pickup orders",
-				suggestion: "Use 'delivered' or 'completed' for delivery orders",
-			});
-		}
-
-		const oldStatus = order.status;
-		let cook = null;
-		let walletCredited = false;
-		let walletAmount = 0;
-
-		// ✅ CREDIT WALLET when order is delivered, picked_up, or completed
-		const isCompletingOrder =
-			(status === "delivered" ||
-				status === "picked_up" ||
-				status === "completed") &&
-			order.paymentStatus === "paid";
-
-		const isAlreadyCompleted =
-			(order.status === "delivered" ||
-				order.status === "picked_up" ||
-				order.status === "completed") &&
-			order.paymentStatus === "paid";
-
-		if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
-			try {
-				// Check if already credited
-				let existingTransaction = null;
-				try {
-					existingTransaction = await WalletTransaction.findOne({
-						reference: order._id.toString(),
-						type: "credit",
-					});
-				} catch (txError) {
-					console.log(
-						"WalletTransaction model might not exist yet, creating...",
-					);
-				}
-
-				if (!existingTransaction) {
-					// Calculate cook's earnings based on fee toggle
-					const feesAddedToCustomer = order.feesAddedToCustomer !== false;
-					let cookAmount = 0;
-					let platformFee = 0;
-					let paystackFeeDeducted = 0;
-
-					if (feesAddedToCustomer) {
-						const platformFeeRate = 0.05;
-						platformFee = order.totalAmount * platformFeeRate;
-						cookAmount =
-							Math.round((order.totalAmount - platformFee) * 100) / 100;
-						paystackFeeDeducted = 0;
-					} else {
-						const platformFeeRate = 0.05;
-						platformFee = order.subtotal * platformFeeRate;
-						const paystackFee = order.paystackFee || 0;
-						cookAmount =
-							Math.round(
-								(order.totalAmount - platformFee - paystackFee) * 100,
-							) / 100;
-						paystackFeeDeducted = paystackFee;
-					}
-
-					if (cookAmount < 0) cookAmount = 0;
-
-					// Find cook user
-					cook = await User.findById(order.cookId);
-					if (!cook) {
-						console.error(`Cook not found for order ${order._id}`);
-						return res.status(404).json({ message: "Cook not found" });
-					}
-
-					// Update cook wallet
-					const previousBalance = cook.walletBalance || 0;
-					cook.walletBalance =
-						Math.round((previousBalance + cookAmount) * 100) / 100;
-					await cook.save();
-
-					// Update CookProfile wallet
-					const cookProfile = await CookProfile.findOne({
-						userId: order.cookId,
-					});
-					if (cookProfile) {
-						cookProfile.walletBalance =
-							Math.round((cookProfile.walletBalance || 0 + cookAmount) * 100) /
-							100;
-						await cookProfile.save();
-					}
-
-					// Increment ordersCount in CookProfile
-					await CookProfile.findOneAndUpdate(
-						{ userId: order.cookId },
-						{ $inc: { ordersCount: 1 } },
-					);
-
-					// Create wallet transaction
-					try {
-						await WalletTransaction.create({
-							cookId: cook._id,
-							type: "credit",
-							amount: cookAmount,
-							reference: order._id.toString(),
-							description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
-							status: "success",
-						});
-					} catch (txError) {
-						console.error(
-							"Failed to create WalletTransaction:",
-							txError.message,
-						);
-					}
-
-					walletCredited = true;
-					walletAmount = cookAmount;
-
-					console.log(
-						`💰 Cook ${cook._id} wallet credited with ₦${cookAmount.toFixed(2)}`,
-					);
-					console.log(`   Total: ₦${order.totalAmount.toFixed(2)}`);
-					console.log(`   Platform Fee (5%): ₦${platformFee.toFixed(2)}`);
-					console.log(
-						`   Paystack Fee Deducted: ₦${paystackFeeDeducted.toFixed(2)}`,
-					);
-					console.log(`   Fees added to customer: ${feesAddedToCustomer}`);
-				} else {
-					console.log(`Order ${order._id} already credited`);
-					walletCredited = true;
-					walletAmount = existingTransaction?.amount || 0;
-					cook = await User.findById(order.cookId);
-				}
-			} catch (error) {
-				console.error("Error crediting wallet:", error);
-			}
-		}
-
-		// Update order status
-		if (oldStatus !== status) {
-			order.status = status;
-		}
-		if (sellerNote) order.sellerNote = sellerNote;
-		await order.save();
-
-		// Fetch fresh cook data for accurate balance
-		if (!cook) {
-			cook = await User.findById(order.cookId);
-		}
-		const currentBalance = cook?.walletBalance || 0;
-
-		// Get updated order with populated fields
-		const updatedOrder = await Order.findById(order._id)
-			.populate("customerId", "fullName phoneNumber email")
-			.populate("items.productId", "name images");
+		const isPaid = order.paymentStatus === "paid";
 
 		res.json({
 			success: true,
-			message: `Order status updated from '${oldStatus}' to '${status}'`,
-			order: updatedOrder,
-			transition: {
-				from: oldStatus,
-				to: status,
-			},
-			wallet: walletCredited
-				? {
-						credited: true,
-						amount: walletAmount,
-						newBalance: currentBalance,
-						message: `₦${walletAmount.toFixed(2)} credited to your wallet. New balance: ₦${currentBalance.toFixed(2)}`,
-					}
-				: {
-						credited: false,
-						currentBalance: currentBalance,
-						message: "No wallet credit applied.",
-					},
-		});
-	} catch (error) {
-		console.error("Update order status error:", error);
-		res.status(500).json({
-			message: "Failed to update order status",
-			error: error.message,
-		});
-	}
-};
-
-export const getOrderRequests = async (req, res) => {
-	try {
-		const userId = req.user._id;
-		const { status } = req.query;
-
-		// Build query
-		const query = {
-			cookId: userId,
-			orderType: "custom_order",
-		};
-
-		// Only filter by status if provided, otherwise get all custom orders
-		if (status) {
-			query.status = status;
-		}
-
-		const orders = await Order.find(query)
-			.populate("customerId", "fullName phoneNumber email")
-			.sort({ createdAt: -1 });
-
-		res.json({
-			success: true,
-			orders,
-			count: orders.length,
-		});
-	} catch (error) {
-		console.error("Get order requests error:", error);
-		res.status(500).json({ message: error.message });
-	}
-};
-
-export const acceptOrderRequest = async (req, res) => {
-	try {
-		const userId = req.user._id;
-		const { requestId } = req.params;
-		const { amount } = req.body;
-
-		// Amount is required - cook sets the price
-		if (!amount || amount <= 0) {
-			return res.status(400).json({
-				message: "Please set a price for this order",
-			});
-		}
-
-		const order = await Order.findOne({
-			_id: requestId,
-			cookId: userId,
-			status: "pending",
-		});
-
-		if (!order) {
-			return res.status(404).json({ message: "Order request not found" });
-		}
-
-		const cook = await CookProfile.findOne({ userId });
-		if (!cook) {
-			return res.status(404).json({ message: "Cook profile not found" });
-		}
-
-		// ✅ Check if cook has fees enabled
-		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
-
-		// ✅ Delivery fee - cook's own delivery fee
-		const deliveryFee = order.deliveryFee || 0;
-
-		// ✅ Calculate fees ONLY on food amount (NOT on delivery)
-		let serviceFee = 0;
-		let paystackFee = 0;
-		let totalAmount = 0;
-
-		if (addFeesToCustomer) {
-			serviceFee = amount * 0.05;
-			paystackFee = (amount + serviceFee) * 0.015 + 1;
-			totalAmount =
-				Math.round((amount + serviceFee + paystackFee + deliveryFee) * 100) /
-				100;
-		} else {
-			totalAmount = Math.round((amount + deliveryFee) * 100) / 100;
-			serviceFee = amount * 0.05;
-			paystackFee = (amount + serviceFee) * 0.015 + 1;
-		}
-
-		// Update order
-		order.subtotal = amount;
-		order.serviceFee = Math.round(serviceFee * 100) / 100;
-		order.paystackFee = Math.round(paystackFee * 100) / 100;
-		order.totalAmount = totalAmount;
-		order.feesAddedToCustomer = addFeesToCustomer;
-		order.status = "confirmed";
-		order.paymentStatus = "pending";
-		await order.save();
-
-		// Generate payment link
-		const paymentReference =
-			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-		order.paymentReference = paymentReference;
-
-		const paystackResponse = await axios.post(
-			"https://api.paystack.co/transaction/initialize",
-			{
-				email: order.customerEmail || `${order.customerPhone}@getameal.com`,
-				amount: Math.round(totalAmount * 100),
-				reference: paymentReference,
-				callback_url: `${process.env.API_URL}/payment/callback`,
-				metadata: {
-					orderId: order._id.toString(),
-					cookId: userId.toString(),
-					customerName: order.customerName,
-					customerPhone: order.customerPhone,
-				},
-			},
-			{
-				headers: {
-					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
-				},
-			},
-		);
-
-		if (cook) {
-			const message = `✅ Order Accepted!\n\nCustomer: ${order.customerName}\nAmount: ₦${order.totalAmount.toFixed(2)}\nReady: ${new Date(order.readyDate).toLocaleDateString()}\n\n🔗 Payment link: ${order.paymentLink}`;
-			await sendWhatsAppToCustomer(order, message);
-		}
-
-		order.paymentLink = paystackResponse.data.data.authorization_url;
-		await order.save();
-
-		// In acceptOrderRequest
-		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodeURIComponent(order.paymentLink)}`;
-
-		// ✅ Create receipt URL for customer
-		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
-
-		// ✅ Send WhatsApp with payment link AND receipt URL
-		const whatsappMessage = `Hi ${order.customerName}! 🍽️
-
-Your order has been accepted by ${cook.storeName}!
-
-Order Details:
-• Order: ${order.customOrderTitle || order.customerNote || "Custom Order"}
-• Food Amount: ₦${amount.toFixed(2)}
-${deliveryFee > 0 ? `• Delivery Fee: ₦${deliveryFee.toFixed(2)}` : ""}
-• Total: ₦${totalAmount.toFixed(2)}
-• Ready: ${new Date(order.readyDate).toLocaleDateString()}
-
-Pay here: ${formattedPaymentLink}
-
-View your receipt: ${receiptUrl}
-
-Thank you for choosing ${cook.storeName}!`;
-
-		const whatsappUrl = `https://wa.me/${order.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
-
-		res.json({
-			success: true,
-			message: "Order accepted",
 			order: {
 				id: order._id,
-				customerName: order.customerName,
-				customerPhone: order.customerPhone,
+
+				customer: {
+					id: order.customerId?._id || null,
+					fullName: order.customerName,
+					phone: order.customerPhone,
+					email: order.customerEmail || null,
+					note: order.customerNote || null,
+				},
+
+				items: order.items.map((item) => ({
+					id: item._id,
+					productId: item.productId?._id || null,
+					name: item.name,
+					quantity: item.quantity,
+					price: item.price,
+					addOns: item.addOns || [],
+					subtotal: item.subtotal,
+					productImage: item.productId?.images?.[0]?.url || null,
+				})),
+
+				customOrderTitle: order.customOrderTitle || null,
+				customOrderDescription: order.customOrderDescription || null,
+
+				deliveryType: order.deliveryType,
+				deliveryAddress: order.deliveryAddress || null,
+				deliveryFee: order.deliveryFee || 0,
+				pickupWindow: order.pickupWindow || null,
+
+				readyDate: order.readyDate,
+				readyTime: order.readyTime || "12:00",
+				createdAt: order.createdAt,
+
 				subtotal: order.subtotal,
-				deliveryFee: order.deliveryFee,
 				serviceFee: order.serviceFee,
-				paystackFee: order.paystackFee,
+				paystackFee: order.paystackFee || 0,
 				totalAmount: order.totalAmount,
-				feesAddedToCustomer: order.feesAddedToCustomer,
-				paymentLink: order.paymentLink,
-				receiptUrl: receiptUrl,
+
+				paymentStatus: order.paymentStatus,
+				paymentMethod: order.paymentMethod || "paystack",
+				paymentReference: order.paymentReference || null,
+				paymentLink: formattedPaymentLink,
+				rawPaymentLink: rawPaymentLink,
+				isPaid: isPaid,
+
 				status: order.status,
-				whatsappUrl: whatsappUrl,
+				statusHistory: {
+					current: order.status,
+					previous: order.oldStatus || null,
+				},
+
+				customerNote: order.customerNote || null,
+				sellerNote: order.sellerNote || null,
+
+				cook: {
+					id: order.cookId._id,
+					fullName: order.cookId.fullName,
+					email: order.cookId.email,
+					phone: order.cookId.phone,
+					profileImage: order.cookId.profileImage || null,
+					storeName: cookProfile?.storeName || null,
+					storeHandle: cookProfile?.storeHandle || null,
+					storeLink: cookProfile?.storeLink || null,
+					kitchenAddress: cookProfile?.kitchenAddress || null,
+					pickupLandmark: cookProfile?.pickupLandmark || null,
+					pickupWindow: cookProfile?.pickupWindow || null,
+					pickupEnabled: cookProfile?.pickupEnabled !== false,
+					deliveryEnabled: cookProfile?.deliveryEnabled || false,
+					rating: cookProfile?.rating || 0,
+					reviewsCount: cookProfile?.reviewsCount || 0,
+					isApproved: cookProfile?.isApproved || false,
+					isAvailable: cookProfile?.isAvailable || false,
+				},
+
+				receiptUrl: `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`,
+
+				feesAddedToCustomer: order.feesAddedToCustomer !== false,
 			},
 		});
 	} catch (error) {
-		console.error("Accept order error:", error);
-		res.status(500).json({ message: error.message });
+		console.error("Get customer order details error:", error);
+		res.status(500).json({
+			success: false,
+			message: error.message,
+		});
 	}
 };
 
-// Decline order request - WITH reason (optional)
-export const declineOrderRequest = async (req, res) => {
-	try {
-		const userId = req.user._id;
-		const { requestId } = req.params;
-		const { reason } = req.body;
-
-		const order = await Order.findOne({
-			_id: requestId,
-			cookId: userId,
-			status: "pending",
-		});
-
-		if (!order) {
-			return res.status(404).json({ message: "Order request not found" });
-		}
-
-		// Get cook profile
-		const cook = await CookProfile.findOne({ userId });
-		if (!cook) {
-			return res.status(404).json({ message: "Cook profile not found" });
-		}
-
-		order.status = "cancelled";
-		order.sellerNote = reason || "Order request declined";
-		await order.save();
-
-		// Send WhatsApp message to customer
-		const declineReason = reason || "Unable to fulfill your order at this time";
-		const whatsappMessage = `Hi ${order.customerName}! 
-
-Your food request has been declined by ${cook.storeName}.
-
-Reason: ${declineReason}
-
-We apologize for any inconvenience. Please feel free to try another cook.
-
-Thank you for choosing GetAMeal!`;
-
-		const whatsappUrl = `https://wa.me/${order.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
-
-		// Send push notification to cook
-		await sendPushToUser(
-			userId,
-			"Order Request Declined ❌",
-			`You declined a custom order from ${order.customerName}`,
-			{
-				type: "order_declined",
-				orderId: order._id.toString(),
-			},
-		);
-
-		res.json({
-			success: true,
-			message: "Order request declined",
-			order,
-			whatsappUrl: whatsappUrl,
-		});
-	} catch (error) {
-		console.error("Decline order request error:", error);
-		res.status(500).json({ message: error.message });
-	}
-};
-
-// controllers/orderController.js - Fixed createCustomOrder
-
-// controllers/orderController.js - Updated createCustomOrder with formatted payment link
-
+// ============================================
+// CREATE CUSTOM ORDER (Cook creates order for customer)
+// ============================================
 export const createCustomOrder = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -1124,6 +900,8 @@ export const createCustomOrder = async (req, res) => {
 
 		// Find or create customer
 		let customer = null;
+		const cleanPhone = formatPhone(customerPhone);
+
 		if (customerId) {
 			customer = await Customer.findOne({ _id: customerId, cookId: userId });
 		}
@@ -1131,7 +909,7 @@ export const createCustomOrder = async (req, res) => {
 		if (!customer && customerPhone) {
 			customer = await Customer.findOne({
 				cookId: userId,
-				phoneNumber: customerPhone.replace(/\D/g, ""),
+				phoneNumber: cleanPhone,
 			});
 		}
 
@@ -1139,31 +917,17 @@ export const createCustomOrder = async (req, res) => {
 			customer = await Customer.create({
 				cookId: userId,
 				fullName: customerName,
-				phoneNumber: customerPhone.replace(/\D/g, ""),
+				phoneNumber: cleanPhone,
 				isActive: true,
 			});
 		}
 
-		// ✅ Delivery fee - cook's own delivery fee
 		const deliveryFeeAmount = deliveryFee || 0;
-
-		// ✅ Calculate fees ONLY on food amount (NOT on delivery)
-		let serviceFee = 0;
-		let paystackFee = 0;
-		let totalAmount = 0;
-
-		if (addFeesToCustomer) {
-			serviceFee = amount * 0.05;
-			paystackFee = (amount + serviceFee) * 0.015 + 1;
-			totalAmount =
-				Math.round(
-					(amount + serviceFee + paystackFee + deliveryFeeAmount) * 100,
-				) / 100;
-		} else {
-			totalAmount = Math.round((amount + deliveryFeeAmount) * 100) / 100;
-			serviceFee = amount * 0.05;
-			paystackFee = (amount + serviceFee) * 0.015 + 1;
-		}
+		const { serviceFee, paystackFee, totalAmount } = calculateOrderTotals(
+			amount,
+			deliveryFeeAmount,
+			addFeesToCustomer,
+		);
 
 		const paymentReference =
 			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
@@ -1172,7 +936,7 @@ export const createCustomOrder = async (req, res) => {
 			cookId: userId,
 			customerId: customer._id,
 			customerName: customer.fullName,
-			customerPhone: customer.phoneNumber,
+			customerPhone: cleanPhone,
 			orderType: "custom_order",
 			customOrderTitle: title,
 			customOrderDescription: description,
@@ -1182,8 +946,8 @@ export const createCustomOrder = async (req, res) => {
 			readyTime: readyTime || "12:00",
 			pickupWindow: pickupWindow || cook.pickupWindow,
 			subtotal: amount,
-			serviceFee: Math.round(serviceFee * 100) / 100,
-			paystackFee: Math.round(paystackFee * 100) / 100,
+			serviceFee: serviceFee,
+			paystackFee: paystackFee,
 			totalAmount: totalAmount,
 			feesAddedToCustomer: addFeesToCustomer,
 			paymentMethod: "paystack",
@@ -1192,13 +956,6 @@ export const createCustomOrder = async (req, res) => {
 			status: "pending",
 			customerNote: customerNote || "",
 		});
-
-		if (order) {
-			const cook = await CookProfile.findOne({ userId: order.cookId });
-			if (cook) {
-				await sendCustomOrderToCustomer(order, cook, order);
-			}
-		}
 
 		// Update customer stats
 		await Customer.findByIdAndUpdate(customer._id, {
@@ -1210,7 +967,7 @@ export const createCustomOrder = async (req, res) => {
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
-				email: customer.email || `${customer.phoneNumber}@getameal.com`,
+				email: customer.email || `${cleanPhone}@getameal.com`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
@@ -1218,7 +975,7 @@ export const createCustomOrder = async (req, res) => {
 					orderId: order._id.toString(),
 					cookId: userId.toString(),
 					customerName: customer.fullName,
-					customerPhone: customer.phoneNumber,
+					customerPhone: cleanPhone,
 				},
 			},
 			{
@@ -1231,24 +988,23 @@ export const createCustomOrder = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
-		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${cleanPhone}`;
 
-		// ✅ Format payment link with phone number included
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
-		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${order.customerPhone}`;
+		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// Send WhatsApp to customer with formatted payment link
-		const whatsappMessage = `Hi ${customer.fullName}! 🍽️
+		// Send WhatsApp to customer (NO EMOJIS)
+		const whatsappMessage = `Hi ${customer.fullName}!
 
-Your custom order has been created by ${cook.storeName}!
+Your custom order has been created by ${cook.storeName}.
 
 Order Details:
-• Order: ${title}
-• Food Amount: ₦${amount.toFixed(2)}
-${deliveryFeeAmount > 0 ? `• Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}` : ""}
-• Total: ₦${totalAmount.toFixed(2)}
-• Ready: ${new Date(readyDate).toLocaleDateString()}
-• Time: ${readyTime || "12:00"}
+- Order: ${title}
+- Food Amount: ₦${amount.toFixed(2)}
+${deliveryFeeAmount > 0 ? `- Delivery Fee: ₦${deliveryFeeAmount.toFixed(2)}` : ""}
+- Total: ₦${totalAmount.toFixed(2)}
+- Ready: ${new Date(readyDate).toLocaleDateString()}
+- Time: ${readyTime || "12:00"}
 
 Pay here: ${formattedPaymentLink}
 
@@ -1256,7 +1012,7 @@ View your receipt: ${receiptUrl}
 
 Thank you for choosing ${cook.storeName}!`;
 
-		const whatsappUrl = `https://wa.me/${customer.phoneNumber}?text=${encodeURIComponent(whatsappMessage)}`;
+		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
 
 		res.status(201).json({
 			success: true,
@@ -1273,8 +1029,8 @@ Thank you for choosing ${cook.storeName}!`;
 				totalAmount: order.totalAmount,
 				feesAddedToCustomer: order.feesAddedToCustomer,
 				status: order.status,
-				paymentLink: formattedPaymentLink, // ✅ Formatted payment link with phone
-				rawPaymentLink: order.paymentLink, // ✅ Keep raw for reference if needed
+				paymentLink: formattedPaymentLink,
+				rawPaymentLink: order.paymentLink,
 				receiptUrl: receiptUrl,
 				readyDate: order.readyDate,
 				deliveryType: order.deliveryType,
@@ -1286,8 +1042,10 @@ Thank you for choosing ${cook.storeName}!`;
 		res.status(500).json({ message: error.message });
 	}
 };
-// controllers/orderController.js - Fixed createOrderFromCart
 
+// ============================================
+// CREATE ORDER FROM CART
+// ============================================
 export const createOrderFromCart = async (req, res) => {
 	try {
 		const {
@@ -1301,7 +1059,6 @@ export const createOrderFromCart = async (req, res) => {
 			readyDate,
 		} = req.body;
 
-		// Validate required fields
 		if (
 			!sessionId ||
 			!customerName ||
@@ -1315,28 +1072,25 @@ export const createOrderFromCart = async (req, res) => {
 			});
 		}
 
-		// Validate phone number
+		const cleanPhone = formatPhone(customerPhone);
 		const phoneRegex = /^[0-9]{11}$/;
-		if (!phoneRegex.test(customerPhone.replace(/\D/g, ""))) {
+		if (!phoneRegex.test(cleanPhone)) {
 			return res.status(400).json({
 				message: "Please enter a valid 11-digit phone number",
 			});
 		}
 
-		// Get cart
 		const cart = await Cart.findOne({ sessionId });
 		if (!cart || cart.items.length === 0) {
 			return res.status(400).json({ message: "Cart is empty" });
 		}
 
-		// Get cook ID from first item
 		const firstProduct = await Meal.findById(cart.items[0].productId);
 		if (!firstProduct) {
 			return res.status(404).json({ message: "Product not found" });
 		}
 		const cookId = firstProduct.cookId;
 
-		// Check if cook exists and is available
 		const cook = await CookProfile.findOne({ userId: cookId });
 		if (!cook) {
 			return res.status(404).json({ message: "Cook not found" });
@@ -1348,10 +1102,8 @@ export const createOrderFromCart = async (req, res) => {
 			return res.status(400).json({ message: "Store is pending approval" });
 		}
 
-		// ✅ Check if cook has fees enabled
-		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false; // Default: true
+		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
 
-		// Validate ready date
 		const readyDateTime = new Date(readyDate);
 		if (readyDateTime < new Date()) {
 			return res
@@ -1359,24 +1111,22 @@ export const createOrderFromCart = async (req, res) => {
 				.json({ message: "Ready date must be in the future" });
 		}
 
-		// Validate delivery address ONLY if delivery type is delivery
 		if (deliveryType === "delivery" && !deliveryAddress) {
 			return res.status(400).json({
 				message: "Delivery address is required for delivery orders",
 			});
 		}
 
-		// Check if customer exists, if not create them
 		let customer = await Customer.findOne({
 			cookId,
-			phoneNumber: customerPhone.replace(/\D/g, ""),
+			phoneNumber: cleanPhone,
 		});
 
 		if (!customer) {
 			customer = await Customer.create({
 				cookId,
 				fullName: customerName,
-				phoneNumber: customerPhone.replace(/\D/g, ""),
+				phoneNumber: cleanPhone,
 				email: customerEmail || "",
 				isActive: true,
 			});
@@ -1384,7 +1134,7 @@ export const createOrderFromCart = async (req, res) => {
 
 		// Build order items from cart
 		const orderItems = [];
-		let foodSubtotal = 0; // ✅ Renamed for clarity
+		let foodSubtotal = 0;
 
 		for (const cartItem of cart.items) {
 			const product = await Meal.findById(cartItem.productId);
@@ -1400,11 +1150,9 @@ export const createOrderFromCart = async (req, res) => {
 				});
 			}
 
-			// Use product price
 			const itemPrice = product.price;
 			let itemSubtotal = itemPrice * cartItem.quantity;
 
-			// Process add-ons
 			const addOns = [];
 			let addOnTotal = 0;
 
@@ -1446,50 +1194,27 @@ export const createOrderFromCart = async (req, res) => {
 			});
 		}
 
-		// ✅ Delivery fee - cook's own delivery fee (no platform fee on this)
 		const deliveryFee = deliveryType === "delivery" ? cook.deliveryFee || 0 : 0;
+		const { serviceFee, paystackFee, totalAmount } = calculateOrderTotals(
+			foodSubtotal,
+			deliveryFee,
+			addFeesToCustomer,
+		);
 
-		// ✅ Calculate fees ONLY on food subtotal (NOT on delivery fee)
-		let serviceFee = 0;
-		let paystackFee = 0;
-		let totalAmount = 0;
+		const paymentReference =
+			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
 
-		if (addFeesToCustomer) {
-			// ✅ Fees added to customer price (only on food)
-			serviceFee = foodSubtotal * 0.05; // 5% platform fee on food only
-			paystackFee = (foodSubtotal + serviceFee) * 0.015 + 1; // Paystack fee on food only
-			totalAmount =
-				Math.round(
-					(foodSubtotal + serviceFee + paystackFee + deliveryFee) * 100,
-				) / 100;
-		} else {
-			// ✅ Fees NOT added to customer - cook absorbs fees
-			totalAmount = Math.round((foodSubtotal + deliveryFee) * 100) / 100;
-			// Fees calculated for payout deduction (on food only)
-			serviceFee = foodSubtotal * 0.05;
-			paystackFee = (foodSubtotal + serviceFee) * 0.015 + 1;
-		}
-
-		console.log("💰 Order Calculation:", {
-			foodSubtotal: foodSubtotal,
-			deliveryFee: deliveryFee,
-			serviceFee: serviceFee,
-			paystackFee: paystackFee,
-			addFeesToCustomer: addFeesToCustomer,
-			totalAmount: totalAmount,
-		});
-
-		// Create order
-		const orderData = {
+		// Create the order
+		const order = await Order.create({
 			cookId,
 			customerId: customer._id,
 			customerName,
-			customerPhone: customerPhone.replace(/\D/g, ""),
+			customerPhone: cleanPhone,
 			customerEmail: customerEmail || "",
 			customerNote: customerNote || "",
 			deliveryType,
 			deliveryAddress: deliveryType === "delivery" ? deliveryAddress : null,
-			deliveryFee: deliveryFee,
+			deliveryFee,
 			readyDate: readyDateTime,
 			readyTime: "12:00",
 			status: "pending",
@@ -1497,8 +1222,8 @@ export const createOrderFromCart = async (req, res) => {
 			orderType: "product_order",
 			items: orderItems,
 			subtotal: Math.round(foodSubtotal * 100) / 100,
-			serviceFee: Math.round(serviceFee * 100) / 100,
-			paystackFee: Math.round(paystackFee * 100) / 100,
+			serviceFee: serviceFee,
+			paystackFee: paystackFee,
 			totalAmount: totalAmount,
 			feesAddedToCustomer: addFeesToCustomer,
 			pickupWindow: {
@@ -1506,28 +1231,21 @@ export const createOrderFromCart = async (req, res) => {
 				to: cook.pickupWindow.to,
 			},
 			sessionId: sessionId,
-		};
+			paymentReference,
+		});
 
-		const order = await Order.create(orderData);
-
-		// Update customer stats
 		await Customer.findByIdAndUpdate(customer._id, {
 			$inc: { ordersCount: 1, totalSpent: totalAmount },
 			$set: { lastOrderDate: new Date() },
 		});
 
-		// Clear cart
 		await Cart.findOneAndDelete({ sessionId });
 
-		// Generate payment link
-		const paymentReference =
-			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-		order.paymentReference = paymentReference;
-
+		// Initialize Paystack payment
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
-				email: customerEmail || `${customerPhone}@getameal.com`,
+				email: customerEmail || `${cleanPhone}@getameal.com`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
@@ -1535,7 +1253,7 @@ export const createOrderFromCart = async (req, res) => {
 					orderId: order._id.toString(),
 					cookId: cookId.toString(),
 					customerName,
-					customerPhone: customerPhone.replace(/\D/g, ""),
+					customerPhone: cleanPhone,
 					sessionId: sessionId,
 				},
 			},
@@ -1549,12 +1267,12 @@ export const createOrderFromCart = async (req, res) => {
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
 
-		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${order.customerPhone}`;
+		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${cleanPhone}`;
 
-		// Send push notification to cook
+		// Send push notification to cook (NO EMOJIS)
 		await sendPushToUser(
 			cookId,
-			"New Order Received 🆕",
+			"New Order Received",
 			`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
 			{
 				type: "new_order",
@@ -1596,6 +1314,348 @@ export const createOrderFromCart = async (req, res) => {
 		console.error("Create order from cart error:", error);
 		res.status(500).json({
 			message: "Failed to create order",
+			error: error.message,
+		});
+	}
+};
+
+// ============================================
+// GET ORDER REQUESTS (Payment Sessions)
+// ============================================
+export const getOrderRequests = async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { status } = req.query;
+
+		const query = {
+			cookId: userId,
+			sessionType: "customer_order",
+		};
+
+		if (status) {
+			query.status = status;
+		}
+
+		const sessions = await PaymentSession.find(query)
+			.populate("customerId", "fullName phoneNumber email")
+			.sort({ createdAt: -1 });
+
+		res.json({
+			success: true,
+			orders: sessions,
+			count: sessions.length,
+		});
+	} catch (error) {
+		console.error("Get order requests error:", error);
+		res.status(500).json({ message: error.message });
+	}
+};
+
+// ============================================
+// GET COOK ORDERS
+// ============================================
+export const getCookOrders = async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { status, limit = 20, page = 1 } = req.query;
+
+		const query = { cookId: userId };
+		if (status) query.status = status;
+
+		const orders = await Order.find(query)
+			.sort({ createdAt: -1 })
+			.skip((page - 1) * limit)
+			.limit(parseInt(limit))
+			.populate("customerId", "fullName phoneNumber")
+			.populate("items.productId", "name images");
+
+		const total = await Order.countDocuments(query);
+
+		res.json({
+			success: true,
+			orders,
+			pagination: {
+				page: parseInt(page),
+				limit: parseInt(limit),
+				total,
+				pages: Math.ceil(total / limit),
+			},
+		});
+	} catch (error) {
+		console.error("Get cook orders error:", error);
+		res.status(500).json({ message: error.message });
+	}
+};
+
+// ============================================
+// GET ORDER DETAILS
+// ============================================
+export const getOrderDetails = async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { orderId } = req.params;
+
+		const order = await Order.findOne({
+			_id: orderId,
+			cookId: userId,
+		})
+			.populate("customerId", "fullName phoneNumber email")
+			.populate("items.productId", "name images description");
+
+		if (!order) {
+			return res.status(404).json({ message: "Order not found" });
+		}
+
+		res.json({
+			success: true,
+			order,
+		});
+	} catch (error) {
+		console.error("Get order details error:", error);
+		res.status(500).json({ message: error.message });
+	}
+};
+
+// ============================================
+// UPDATE ORDER STATUS
+// ============================================
+export const updateOrderStatus = async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { orderId } = req.params;
+		const { status, sellerNote } = req.body;
+
+		if (!status) {
+			return res.status(400).json({ message: "Status is required" });
+		}
+
+		const validStatuses = [
+			"pending",
+			"confirmed",
+			"delivered",
+			"picked_up",
+			"completed",
+			"cancelled",
+		];
+
+		if (!validStatuses.includes(status)) {
+			return res.status(400).json({
+				message: `Invalid status. Allowed values: ${validStatuses.join(", ")}`,
+				received: status,
+			});
+		}
+
+		const order = await Order.findOne({
+			_id: orderId,
+			cookId: userId,
+		});
+
+		if (!order) {
+			return res.status(404).json({ message: "Order not found" });
+		}
+
+		if (
+			(status === "delivered" ||
+				status === "picked_up" ||
+				status === "completed") &&
+			order.paymentStatus !== "paid"
+		) {
+			return res.status(400).json({
+				message: "Cannot complete order. Payment has not been confirmed.",
+				paymentStatus: order.paymentStatus,
+			});
+		}
+
+		const allowedTransitions = {
+			pending: ["confirmed", "cancelled"],
+			confirmed: ["delivered", "picked_up", "completed", "cancelled"],
+			delivered: [],
+			picked_up: [],
+			completed: [],
+			cancelled: [],
+		};
+
+		const allowedNext = allowedTransitions[order.status] || [];
+		const isSameStatus = order.status === status;
+		const isAllowedTransition = allowedNext.includes(status);
+
+		if (!isAllowedTransition && !isSameStatus && allowedNext.length > 0) {
+			return res.status(400).json({
+				message: `Cannot transition from '${order.status}' to '${status}'`,
+				allowed: allowedNext,
+			});
+		}
+
+		if (
+			(status === "delivered" || status === "completed") &&
+			order.deliveryType !== "delivery"
+		) {
+			return res.status(400).json({
+				message: `${status} is only for delivery orders`,
+				suggestion: "Use 'picked_up' for pickup orders",
+			});
+		}
+
+		if (status === "picked_up" && order.deliveryType !== "pickup") {
+			return res.status(400).json({
+				message: "picked_up is only for pickup orders",
+				suggestion: "Use 'delivered' or 'completed' for delivery orders",
+			});
+		}
+
+		const oldStatus = order.status;
+		let cook = null;
+		let walletCredited = false;
+		let walletAmount = 0;
+
+		const isCompletingOrder =
+			(status === "delivered" ||
+				status === "picked_up" ||
+				status === "completed") &&
+			order.paymentStatus === "paid";
+
+		const isAlreadyCompleted =
+			(order.status === "delivered" ||
+				order.status === "picked_up" ||
+				order.status === "completed") &&
+			order.paymentStatus === "paid";
+
+		if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
+			try {
+				let existingTransaction = null;
+				try {
+					existingTransaction = await WalletTransaction.findOne({
+						reference: order._id.toString(),
+						type: "credit",
+					});
+				} catch (txError) {
+					console.log("WalletTransaction model might not exist yet");
+				}
+
+				if (!existingTransaction) {
+					const feesAddedToCustomer = order.feesAddedToCustomer !== false;
+					let cookAmount = 0;
+					let platformFee = 0;
+					let paystackFeeDeducted = 0;
+
+					if (feesAddedToCustomer) {
+						const platformFeeRate = 0.05;
+						platformFee = order.totalAmount * platformFeeRate;
+						cookAmount =
+							Math.round((order.totalAmount - platformFee) * 100) / 100;
+						paystackFeeDeducted = 0;
+					} else {
+						const platformFeeRate = 0.05;
+						platformFee = order.subtotal * platformFeeRate;
+						const paystackFee = order.paystackFee || 0;
+						cookAmount =
+							Math.round(
+								(order.totalAmount - platformFee - paystackFee) * 100,
+							) / 100;
+						paystackFeeDeducted = paystackFee;
+					}
+
+					if (cookAmount < 0) cookAmount = 0;
+
+					cook = await User.findById(order.cookId);
+					if (!cook) {
+						console.error(`Cook not found for order ${order._id}`);
+						return res.status(404).json({ message: "Cook not found" });
+					}
+
+					const previousBalance = cook.walletBalance || 0;
+					cook.walletBalance =
+						Math.round((previousBalance + cookAmount) * 100) / 100;
+					await cook.save();
+
+					const cookProfile = await CookProfile.findOne({
+						userId: order.cookId,
+					});
+					if (cookProfile) {
+						cookProfile.walletBalance =
+							Math.round((cookProfile.walletBalance || 0 + cookAmount) * 100) /
+							100;
+						await cookProfile.save();
+					}
+
+					await CookProfile.findOneAndUpdate(
+						{ userId: order.cookId },
+						{ $inc: { ordersCount: 1 } },
+					);
+
+					try {
+						await WalletTransaction.create({
+							cookId: cook._id,
+							type: "credit",
+							amount: cookAmount,
+							reference: order._id.toString(),
+							description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
+							status: "success",
+						});
+					} catch (txError) {
+						console.error(
+							"Failed to create WalletTransaction:",
+							txError.message,
+						);
+					}
+
+					walletCredited = true;
+					walletAmount = cookAmount;
+
+					console.log(
+						`Cook ${cook._id} wallet credited with ₦${cookAmount.toFixed(2)}`,
+					);
+				} else {
+					console.log(`Order ${order._id} already credited`);
+					walletCredited = true;
+					walletAmount = existingTransaction?.amount || 0;
+					cook = await User.findById(order.cookId);
+				}
+			} catch (error) {
+				console.error("Error crediting wallet:", error);
+			}
+		}
+
+		if (oldStatus !== status) {
+			order.status = status;
+		}
+		if (sellerNote) order.sellerNote = sellerNote;
+		await order.save();
+
+		if (!cook) {
+			cook = await User.findById(order.cookId);
+		}
+		const currentBalance = cook?.walletBalance || 0;
+
+		const updatedOrder = await Order.findById(order._id)
+			.populate("customerId", "fullName phoneNumber email")
+			.populate("items.productId", "name images");
+
+		res.json({
+			success: true,
+			message: `Order status updated from '${oldStatus}' to '${status}'`,
+			order: updatedOrder,
+			transition: {
+				from: oldStatus,
+				to: status,
+			},
+			wallet: walletCredited
+				? {
+						credited: true,
+						amount: walletAmount,
+						newBalance: currentBalance,
+						message: `₦${walletAmount.toFixed(2)} credited to your wallet. New balance: ₦${currentBalance.toFixed(2)}`,
+					}
+				: {
+						credited: false,
+						currentBalance: currentBalance,
+						message: "No wallet credit applied.",
+					},
+		});
+	} catch (error) {
+		console.error("Update order status error:", error);
+		res.status(500).json({
+			message: "Failed to update order status",
 			error: error.message,
 		});
 	}
