@@ -1114,24 +1114,46 @@ Thank you for choosing ${cook.storeName}!`;
 
 		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
 
-		// ✅ Create in-app notification for the COOK using Notification.create
+		// ✅ Create in-app notification for the COOK - FIXED
 		try {
-			await Notification.create({
-				userId: userId, // Cook's user ID
+			// Log what we're trying to create
+			console.log(`📝 Creating notification for cook: ${userId}`);
+			console.log(`Title: Custom Order Created`);
+			console.log(
+				`Body: You created a custom order for ${customer.fullName}: "${title}"`,
+			);
+
+			const notificationData = {
+				userId: userId,
 				title: "Custom Order Created",
 				body: `You created a custom order for ${customer.fullName}: "${title}" (₦${totalAmount.toFixed(2)})`,
-				type: "order",
+				type: "general", // ✅ Using "general" which is definitely valid
 				data: {
-					orderId: order._id,
+					orderId: order._id.toString(),
 					customerName: customer.fullName,
 					title: title,
 					amount: totalAmount,
 					type: "custom_order",
 				},
-			});
-			console.log(`✅ In-app notification created for cook: ${userId}`);
+			};
+
+			console.log(
+				"📝 Notification data:",
+				JSON.stringify(notificationData, null, 2),
+			);
+
+			const notification = await Notification.create(notificationData);
+			console.log(
+				`✅ In-app notification created for cook: ${userId}`,
+				notification._id,
+			);
 		} catch (notifError) {
-			console.error("Failed to create cook notification:", notifError.message);
+			console.error(
+				"❌ Failed to create cook notification:",
+				notifError.message,
+			);
+			console.error("❌ Error details:", notifError.errors);
+			// Don't fail the whole process
 		}
 
 		res.status(201).json({
