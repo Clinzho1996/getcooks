@@ -228,8 +228,19 @@ Thank you for choosing ${cook.storeName}!`;
 			console.error("Failed to send push notification:", pushError.message);
 		}
 
-		// ✅ Create in-app notification for the COOK
+		// ✅ Create in-app notification for the COOK - with detailed logging
 		try {
+			// Log what we're trying to create
+			console.log(`📝 Creating in-app notification for cook: ${cookId}`);
+			console.log(`📝 Customer: ${customerName}`);
+			console.log(`📝 Food Request: ${foodRequest}`);
+
+			// Verify Notification model is available
+			if (!Notification) {
+				console.error("❌ Notification model is not imported or undefined!");
+				throw new Error("Notification model not available");
+			}
+
 			const notificationData = {
 				userId: cookId,
 				title: "New Food Request",
@@ -239,14 +250,22 @@ Thank you for choosing ${cook.storeName}!`;
 					sessionId: paymentSession._id.toString(),
 					customerName: customerName,
 					foodRequest: foodRequest,
-					type: "food_request",
-				},
+					type: "food_request"
+				}
 			};
 
-			await Notification.create(notificationData);
-			console.log(`✅ In-app notification created for cook: ${cookId}`);
+			console.log("📝 Notification data:", JSON.stringify(notificationData, null, 2));
+
+			const notification = await Notification.create(notificationData);
+			console.log(`✅ In-app notification created for cook: ${cookId}`, notification._id);
+
 		} catch (notifError) {
-			console.error("Failed to create cook notification:", notifError.message);
+			console.error("❌ Failed to create cook notification:", notifError.message);
+			console.error("❌ Error stack:", notifError.stack);
+			if (notifError.errors) {
+				console.error("❌ Validation errors:", notifError.errors);
+			}
+			// Don't fail the whole process
 		}
 
 		res.status(201).json({
