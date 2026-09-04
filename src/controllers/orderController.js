@@ -10,6 +10,7 @@ import PaymentSession from "../models/PaymentSession.js";
 import User from "../models/User.js";
 import WalletTransaction from "../models/WalletTransaction.js";
 import { sendPushToUser } from "../services/pushService.js";
+import { createAdminNotification } from "../utils/adminNotification.js";
 import { sendPaymentConfirmationToCook } from "../utils/whatsappNotifications.js";
 
 // ============================================
@@ -777,6 +778,12 @@ export const handlePaymentCallback = async (req, res) => {
 			});
 		}
 
+		await createAdminNotification({
+			type: "payment_verified",
+			message: `Payment verified for order ${order._id} from ${order.customerName}`,
+			orderId: order._id,
+			cookId: order.cookId,
+		});
 		return res.redirect(
 			`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Payment+verified`,
 		);
@@ -1056,6 +1063,13 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
+		await createAdminNotification({
+			type: "custom_order_created",
+			message: `New custom order created by ${cook.storeName} for ${customer.fullName}`,
+			orderId: order._id,
+			cookId: userId,
+			customerId: customer._id,
+		});
 		// Send WhatsApp to customer (NO EMOJIS)
 		const whatsappMessage = `Hi ${customer.fullName}!
 
@@ -1343,6 +1357,13 @@ export const createOrderFromCart = async (req, res) => {
 			},
 		);
 
+		await createAdminNotification({
+			type: "new_order",
+			orderId: order._id.toString(),
+			message: `${customerName} placed a new order for ₦${totalAmount.toFixed(
+				2,
+			)}`,
+		});
 		res.status(201).json({
 			success: true,
 			message:
