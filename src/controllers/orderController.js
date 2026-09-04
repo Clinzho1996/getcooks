@@ -762,14 +762,14 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("WhatsApp notification error:", whatsappError.message);
 		}
 
-		// ✅ Use notification service for customer
+		// In handlePaymentCallback - use valid types
 		try {
 			if (order.customerId) {
 				await sendNotification(
 					order.customerId,
 					"Order Confirmed",
 					`Your order has been confirmed by ${cook?.storeName || "the cook"}! We'll start preparing it soon.`,
-					"order_confirmed",
+					"order_confirmed", // ✅ This is valid
 					{ orderId: order._id },
 				);
 				console.log(
@@ -1083,13 +1083,13 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// ✅ Use notification service for customer
+		// In createCustomOrder - use valid types
 		try {
 			await sendNotification(
 				customer._id,
-				"New Custom Order",
+				"Custom Order Created",
 				`Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
-				"custom_order_created",
+				"order", // ✅ Use "order" instead of "custom_order_created"
 				{ orderId: order._id },
 			);
 		} catch (notifError) {
@@ -1403,13 +1403,13 @@ export const createOrderFromCart = async (req, res) => {
 			console.error("Failed to send push notification:", pushError.message);
 		}
 
-		// ✅ Use notification service for cook
+		// In createOrderFromCart - use valid types
 		try {
 			await sendNotification(
 				cookId,
 				"New Order Received",
 				`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-				"new_order",
+				"order", // ✅ Use "order" instead of "new_order"
 				{ orderId: order._id },
 			);
 		} catch (notifError) {
