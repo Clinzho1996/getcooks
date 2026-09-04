@@ -5,6 +5,7 @@ import Cart from "../models/Cart.js";
 import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
 import Meal from "../models/Meal.js";
+import Notification from "../models/Notification.js";
 import Order from "../models/Order.js";
 import PaymentSession from "../models/PaymentSession.js";
 import User from "../models/User.js";
@@ -629,7 +630,6 @@ export const handlePaymentCallback = async (req, res) => {
 
 		let order = null;
 
-		// If order already exists (from cart flow), find it
 		if (metaOrderId) {
 			order = await Order.findById(metaOrderId)
 				.populate("items.productId")
@@ -637,13 +637,11 @@ export const handlePaymentCallback = async (req, res) => {
 				.populate("customerId");
 		}
 
-		// If no order yet, check if there's a payment session (customer order flow)
 		if (!order && metaSessionId) {
 			const paymentSession =
 				await PaymentSession.findById(metaSessionId).populate("customerId");
 
 			if (paymentSession && paymentSession.status === "pending") {
-				// Order hasn't been created yet - create it now
 				const cook = await CookProfile.findOne({
 					userId: paymentSession.cookId,
 				});
@@ -661,7 +659,6 @@ export const handlePaymentCallback = async (req, res) => {
 					addFeesToCustomer,
 				);
 
-				// Create the order
 				order = await Order.create({
 					cookId: paymentSession.cookId,
 					customerId: paymentSession.customerId._id,
@@ -688,12 +685,10 @@ export const handlePaymentCallback = async (req, res) => {
 					paymentReference: reference,
 				});
 
-				// Update payment session
 				paymentSession.status = "completed";
 				paymentSession.orderId = order._id;
 				await paymentSession.save();
 
-				// Update customer stats
 				await Customer.findByIdAndUpdate(paymentSession.customerId._id, {
 					$inc: { ordersCount: 1, totalSpent: totalAmount },
 					$set: { lastOrderDate: new Date() },
@@ -725,7 +720,6 @@ export const handlePaymentCallback = async (req, res) => {
 			);
 		}
 
-		// Update order with payment
 		const paidAmount = Math.round((paymentData.amount / 100) * 100) / 100;
 		const expectedAmount = Math.round(order.totalAmount * 100) / 100;
 
@@ -749,10 +743,9 @@ export const handlePaymentCallback = async (req, res) => {
 			`Order ${order._id} updated: paymentStatus=paid, status=confirmed`,
 		);
 
-		// Get cook profile for notifications
 		const cook = await CookProfile.findOne({ userId: order.cookId });
 
-		// Send push notification to cook
+		// ✅ Send push notification to cook (may fail, but that's okay)
 		try {
 			const cookUser = await User.findById(order.cookId);
 			if (cookUser) {
@@ -772,6 +765,33 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("Push notification error:", pushError.message);
 		}
 
+		// ✅ Create IN-APP notification for the cook (this is the one that shows in the app)
+		try {
+			const notification = await Notification.create({
+				userId: order.cookId,
+				title: "New Paid Order",
+				body: `${order.customerName} placed an order for ₦${order.totalAmount.toFixed(2)}`,
+				type: "payment",
+				data: {
+					orderId: order._id,
+					customerName: order.customerName,
+					amount: order.totalAmount,
+					paymentReference: reference,
+					type: "payment_received",
+				},
+			});
+			console.log(
+				`✅ In-app notification created for cook: ${order.cookId}`,
+				notification._id,
+			);
+		} catch (notifError) {
+			console.error(
+				"Failed to create in-app notification:",
+				notifError.message,
+			);
+			console.error("Error details:", notifError.errors);
+		}
+
 		// Send WhatsApp confirmation to cook
 		try {
 			if (cook) {
@@ -779,26 +799,6 @@ export const handlePaymentCallback = async (req, res) => {
 			}
 		} catch (whatsappError) {
 			console.error("WhatsApp notification error:", whatsappError.message);
-		}
-
-		// ✅ Create in-app notification for the COOK (payment received)
-		try {
-			await sendNotification(
-				order.cookId, // Cook's user ID
-				"Payment Received",
-				`${order.customerName} paid ₦${order.totalAmount.toFixed(2)} for order #${order._id.toString().slice(-6)}`,
-				"payment",
-				{
-					orderId: order._id,
-					customerName: order.customerName,
-					amount: order.totalAmount,
-					paymentReference: reference,
-					type: "payment_received",
-				},
-			);
-			console.log(`✅ In-app notification created for cook: ${order.cookId}`);
-		} catch (notifError) {
-			console.error("Failed to create cook notification:", notifError.message);
 		}
 
 		if (method === "POST") {
