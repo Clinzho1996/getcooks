@@ -285,6 +285,10 @@ export const acceptOrderRequest = async (req, res) => {
 			addFeesToCustomer,
 		);
 
+		// ✅ Generate a NEW payment reference for this order
+		const newPaymentReference =
+			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+
 		// Create the actual order NOW (after price is set)
 		const order = await Order.create({
 			cookId: userId,
@@ -310,12 +314,13 @@ export const acceptOrderRequest = async (req, res) => {
 			feesAddedToCustomer: addFeesToCustomer,
 			pickupWindow: paymentSession.pickupWindow,
 			sessionId: paymentSession.sessionId || null,
-			paymentReference: paymentSession.paymentReference,
+			paymentReference: newPaymentReference, // ✅ Use NEW reference
 		});
 
-		// Update payment session
+		// Update payment session with the new reference
 		paymentSession.status = "completed";
 		paymentSession.orderId = order._id;
+		paymentSession.paymentReference = newPaymentReference;
 		await paymentSession.save();
 
 		// Update customer stats
@@ -324,22 +329,19 @@ export const acceptOrderRequest = async (req, res) => {
 			$set: { lastOrderDate: new Date() },
 		});
 
-		// ✅ FIX: Use a valid email format
+		// ✅ Initialize Paystack payment with NEW reference
 		const customerEmail =
 			paymentSession.customerEmail ||
 			`customer_${paymentSession.customerPhone}@getameal.com`;
 
-		// ✅ FIX: Ensure amount is an integer (kobo)
 		const amountInKobo = Math.round(totalAmount * 100);
 
-		// ✅ FIX: Check if amount is within Paystack limits (min 100 kobo = ₦1)
 		if (amountInKobo < 100) {
 			return res.status(400).json({
 				message: "Amount must be at least ₦1",
 			});
 		}
 
-		// ✅ FIX: For test mode, Paystack has a maximum of ₦250,000 (25,000,000 kobo)
 		if (amountInKobo > 25000000) {
 			return res.status(400).json({
 				message: "Amount exceeds maximum limit of ₦250,000",
@@ -350,17 +352,16 @@ export const acceptOrderRequest = async (req, res) => {
 			email: customerEmail,
 			amount: amountInKobo,
 			amountInNaira: totalAmount,
-			reference: paymentSession.paymentReference,
+			reference: newPaymentReference,
 			callback_url: `${process.env.API_URL}/payment/callback`,
 		});
 
-		// Update Paystack amount
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
 				email: customerEmail,
 				amount: amountInKobo,
-				reference: paymentSession.paymentReference,
+				reference: newPaymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
 				metadata: {
 					orderId: order._id.toString(),
@@ -375,11 +376,10 @@ export const acceptOrderRequest = async (req, res) => {
 					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
 					"Content-Type": "application/json",
 				},
-				timeout: 30000, // 30 second timeout
+				timeout: 30000,
 			},
 		);
 
-		// ✅ Check if Paystack returned a valid response
 		if (!paystackResponse.data || !paystackResponse.data.data) {
 			console.error("Invalid Paystack response:", paystackResponse.data);
 			throw new Error("Paystack returned an invalid response");
@@ -454,7 +454,6 @@ Thank you for choosing ${cook.storeName}!`;
 	} catch (error) {
 		console.error("Accept order error:", error);
 
-		// ✅ Better error handling for Paystack errors
 		if (error.response) {
 			console.error("Paystack error response:", {
 				status: error.response.status,
