@@ -423,6 +423,25 @@ Thank you for choosing ${cook.storeName}!`;
 
 		const whatsappUrl = `https://wa.me/${paymentSession.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
 
+		try {
+			await sendNotification(
+				userId, // Cook's user ID
+				"Order Accepted",
+				`You accepted a custom order from ${paymentSession.customerName}: ${paymentSession.foodRequest} (₦${totalAmount.toFixed(2)})`,
+				"order",
+				{
+					orderId: order._id,
+					customerName: paymentSession.customerName,
+					foodRequest: paymentSession.foodRequest,
+					amount: totalAmount,
+					type: "order_accepted",
+				},
+			);
+			console.log(`✅ In-app notification created for cook: ${userId}`);
+		} catch (notifError) {
+			console.error("Failed to create cook notification:", notifError.message);
+		}
+
 		// Send push notification to cook
 		await sendPushToUser(
 			userId,
@@ -762,36 +781,24 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("WhatsApp notification error:", whatsappError.message);
 		}
 
-		// In handlePaymentCallback - use valid types
+		// ✅ Create in-app notification for the COOK (payment received)
 		try {
-			if (order.customerId) {
-				await sendNotification(
-					order.customerId,
-					"Order Confirmed",
-					`Your order has been confirmed by ${cook?.storeName || "the cook"}! We'll start preparing it soon.`,
-					"order_confirmed", // ✅ This is valid
-					{ orderId: order._id },
-				);
-				console.log(
-					`✅ Notification created for customer: ${order.customerId}`,
-				);
-			}
-		} catch (notifError) {
-			console.error(
-				"Failed to create customer notification:",
-				notifError.message,
+			await sendNotification(
+				order.cookId, // Cook's user ID
+				"Payment Received",
+				`${order.customerName} paid ₦${order.totalAmount.toFixed(2)} for order #${order._id.toString().slice(-6)}`,
+				"payment",
+				{
+					orderId: order._id,
+					customerName: order.customerName,
+					amount: order.totalAmount,
+					paymentReference: reference,
+					type: "payment_received",
+				},
 			);
-		}
-
-		// ✅ Use notification service for admin
-		try {
-			await createAdminNotification({
-				type: "order_paid",
-				orderId: order._id.toString(),
-				message: `Order #${order._id.toString().slice(-6)} paid: ₦${order.totalAmount.toFixed(2)}`,
-			});
-		} catch (adminError) {
-			console.error("Failed to create admin notification:", adminError.message);
+			console.log(`✅ In-app notification created for cook: ${order.cookId}`);
+		} catch (notifError) {
+			console.error("Failed to create cook notification:", notifError.message);
 		}
 
 		if (method === "POST") {
@@ -1083,36 +1090,7 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// In createCustomOrder - use valid types
-		try {
-			await sendNotification(
-				customer._id,
-				"Custom Order Created",
-				`Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
-				"order", // ✅ Use "order" instead of "custom_order_created"
-				{ orderId: order._id },
-			);
-		} catch (notifError) {
-			console.error(
-				"Failed to create customer notification:",
-				notifError.message,
-			);
-		}
-
-		// ✅ Use notification service for admin
-		try {
-			await createAdminNotification({
-				type: "custom_order_created",
-				message: `New custom order created by ${cook.storeName} for ${customer.fullName}`,
-				orderId: order._id,
-				cookId: userId,
-				customerId: customer._id,
-			});
-		} catch (adminError) {
-			console.error("Failed to create admin notification:", adminError.message);
-		}
-
-		// Send WhatsApp to customer
+		// ✅ Send WhatsApp to customer
 		const whatsappMessage = `Hi ${customer.fullName}!
 
 Your custom order has been created by ${cook.storeName}.
@@ -1132,6 +1110,26 @@ View your receipt: ${receiptUrl}
 Thank you for choosing ${cook.storeName}!`;
 
 		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+
+		// ✅ Create in-app notification for the COOK (not the customer)
+		try {
+			await sendNotification(
+				userId, // Cook's user ID
+				"Custom Order Created",
+				`You created a custom order for ${customer.fullName}: "${title}" (₦${totalAmount.toFixed(2)})`,
+				"order",
+				{
+					orderId: order._id,
+					customerName: customer.fullName,
+					title: title,
+					amount: totalAmount,
+					type: "custom_order",
+				},
+			);
+			console.log(`✅ In-app notification created for cook: ${userId}`);
+		} catch (notifError) {
+			console.error("Failed to create cook notification:", notifError.message);
+		}
 
 		res.status(201).json({
 			success: true,
@@ -1388,7 +1386,6 @@ export const createOrderFromCart = async (req, res) => {
 
 		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${cleanPhone}`;
 
-		// Send push notification to cook
 		try {
 			await sendPushToUser(
 				cookId,
@@ -1403,15 +1400,21 @@ export const createOrderFromCart = async (req, res) => {
 			console.error("Failed to send push notification:", pushError.message);
 		}
 
-		// In createOrderFromCart - use valid types
+		// ✅ Create in-app notification for the COOK
 		try {
 			await sendNotification(
-				cookId,
+				cookId, // Cook's user ID
 				"New Order Received",
 				`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-				"order", // ✅ Use "order" instead of "new_order"
-				{ orderId: order._id },
+				"order",
+				{
+					orderId: order._id,
+					customerName: customerName,
+					amount: totalAmount,
+					type: "product_order",
+				},
 			);
+			console.log(`✅ In-app notification created for cook: ${cookId}`);
 		} catch (notifError) {
 			console.error("Failed to create cook notification:", notifError.message);
 		}
