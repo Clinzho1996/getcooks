@@ -194,7 +194,7 @@ export const createCustomerOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(paymentSession.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${paymentSession._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// Send WhatsApp to customer (NO EMOJIS)
+		// Send WhatsApp to customer
 		const whatsappMessage = `Hi ${customerName}!
 
 Your food request has been received by ${cook.storeName}.
@@ -211,18 +211,43 @@ Thank you for choosing ${cook.storeName}!`;
 
 		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
 
-		// Send push notification to cook (NO EMOJIS)
-		await sendPushToUser(
-			cookId,
-			"New Food Request",
-			`${customerName} wants: ${foodRequest}`,
-			{
-				type: "new_order_request",
-				sessionId: paymentSession._id.toString(),
-				customerName,
-				foodRequest,
-			},
-		);
+		// Send push notification to cook
+		try {
+			await sendPushToUser(
+				cookId,
+				"New Food Request",
+				`${customerName} wants: ${foodRequest}`,
+				{
+					type: "new_order_request",
+					sessionId: paymentSession._id.toString(),
+					customerName,
+					foodRequest,
+				},
+			);
+		} catch (pushError) {
+			console.error("Failed to send push notification:", pushError.message);
+		}
+
+		// ✅ Create in-app notification for the COOK
+		try {
+			const notificationData = {
+				userId: cookId,
+				title: "New Food Request",
+				body: `${customerName} wants: ${foodRequest}`,
+				type: "order",
+				data: {
+					sessionId: paymentSession._id.toString(),
+					customerName: customerName,
+					foodRequest: foodRequest,
+					type: "food_request",
+				},
+			};
+
+			await Notification.create(notificationData);
+			console.log(`✅ In-app notification created for cook: ${cookId}`);
+		} catch (notifError) {
+			console.error("Failed to create cook notification:", notifError.message);
+		}
 
 		res.status(201).json({
 			success: true,
