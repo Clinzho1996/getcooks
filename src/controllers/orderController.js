@@ -324,14 +324,42 @@ export const acceptOrderRequest = async (req, res) => {
 			$set: { lastOrderDate: new Date() },
 		});
 
+		// ✅ FIX: Use a valid email format
+		const customerEmail =
+			paymentSession.customerEmail ||
+			`customer_${paymentSession.customerPhone}@getameal.com`;
+
+		// ✅ FIX: Ensure amount is an integer (kobo)
+		const amountInKobo = Math.round(totalAmount * 100);
+
+		// ✅ FIX: Check if amount is within Paystack limits (min 100 kobo = ₦1)
+		if (amountInKobo < 100) {
+			return res.status(400).json({
+				message: "Amount must be at least ₦1",
+			});
+		}
+
+		// ✅ FIX: For test mode, Paystack has a maximum of ₦250,000 (25,000,000 kobo)
+		if (amountInKobo > 25000000) {
+			return res.status(400).json({
+				message: "Amount exceeds maximum limit of ₦250,000",
+			});
+		}
+
+		console.log("💰 Paystack payment initialization:", {
+			email: customerEmail,
+			amount: amountInKobo,
+			amountInNaira: totalAmount,
+			reference: paymentSession.paymentReference,
+			callback_url: `${process.env.API_URL}/payment/callback`,
+		});
+
 		// Update Paystack amount
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
-				email:
-					paymentSession.customerEmail ||
-					`${paymentSession.customerPhone}@getameal.com`,
-				amount: Math.round(totalAmount * 100),
+				email: customerEmail,
+				amount: amountInKobo,
 				reference: paymentSession.paymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
 				metadata: {
@@ -345,9 +373,25 @@ export const acceptOrderRequest = async (req, res) => {
 			{
 				headers: {
 					Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+					"Content-Type": "application/json",
 				},
+				timeout: 30000, // 30 second timeout
 			},
 		);
+
+		// ✅ Check if Paystack returned a valid response
+		if (!paystackResponse.data || !paystackResponse.data.data) {
+			console.error("Invalid Paystack response:", paystackResponse.data);
+			throw new Error("Paystack returned an invalid response");
+		}
+
+		if (!paystackResponse.data.data.authorization_url) {
+			console.error(
+				"No authorization URL in Paystack response:",
+				paystackResponse.data,
+			);
+			throw new Error("Paystack did not return an authorization URL");
+		}
 
 		order.paymentLink = paystackResponse.data.data.authorization_url;
 		await order.save();
@@ -357,7 +401,7 @@ export const acceptOrderRequest = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${order.customerPhone}`;
 
-		// Send WhatsApp to customer (NO EMOJIS)
+		// Send WhatsApp to customer
 		const whatsappMessage = `Hi ${paymentSession.customerName}!
 
 Your order has been accepted by ${cook.storeName}.
@@ -377,7 +421,7 @@ Thank you for choosing ${cook.storeName}!`;
 
 		const whatsappUrl = `https://wa.me/${paymentSession.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
 
-		// Send push notification to cook (NO EMOJIS)
+		// Send push notification to cook
 		await sendPushToUser(
 			userId,
 			"Order Accepted",
@@ -409,7 +453,27 @@ Thank you for choosing ${cook.storeName}!`;
 		});
 	} catch (error) {
 		console.error("Accept order error:", error);
-		res.status(500).json({ message: error.message });
+
+		// ✅ Better error handling for Paystack errors
+		if (error.response) {
+			console.error("Paystack error response:", {
+				status: error.response.status,
+				data: error.response.data,
+				headers: error.response.headers,
+			});
+
+			return res.status(error.response.status || 500).json({
+				message:
+					error.response.data?.message ||
+					"Paystack payment initialization failed",
+				details: error.response.data,
+			});
+		}
+
+		res.status(500).json({
+			message: error.message || "Failed to accept order",
+			error: error.message,
+		});
 	}
 };
 
