@@ -5,6 +5,7 @@ import Cart from "../models/Cart.js";
 import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
 import Meal from "../models/Meal.js";
+import Notification from "../models/Notification.js";
 import Order from "../models/Order.js";
 import PaymentSession from "../models/PaymentSession.js";
 import User from "../models/User.js";
@@ -778,11 +779,12 @@ export const handlePaymentCallback = async (req, res) => {
 			});
 		}
 
-		await createAdminNotification({
-			type: "payment_verified",
-			message: `Payment verified for order ${order._id} from ${order.customerName}`,
+		await Notification.create({
+			userId: order.customerId,
+			title: "Order Confirmed",
+			body: `Your order has been confirmed by ${cook.storeName}! We'll start preparing it soon.`,
+			type: "order_confirmed",
 			orderId: order._id,
-			cookId: order.cookId,
 		});
 		return res.redirect(
 			`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Payment+verified`,
@@ -1063,6 +1065,13 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
+		await Notification.create({
+			userId: customer._id,
+			title: "New Custom Order",
+			body: `Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
+			type: "custom_order_created",
+			orderId: order._id,
+		});
 		await createAdminNotification({
 			type: "custom_order_created",
 			message: `New custom order created by ${cook.storeName} for ${customer.fullName}`,
@@ -1356,6 +1365,14 @@ export const createOrderFromCart = async (req, res) => {
 				orderId: order._id.toString(),
 			},
 		);
+
+		await Notification.create({
+			userId: cookId,
+			title: "New Order Received",
+			body: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
+			type: "new_order",
+			orderId: order._id,
+		});
 
 		await createAdminNotification({
 			type: "new_order",
