@@ -5,11 +5,11 @@ import Cart from "../models/Cart.js";
 import CookProfile from "../models/CookProfile.js";
 import Customer from "../models/Customer.js";
 import Meal from "../models/Meal.js";
-import Notification from "../models/Notification.js";
 import Order from "../models/Order.js";
 import PaymentSession from "../models/PaymentSession.js";
 import User from "../models/User.js";
 import WalletTransaction from "../models/WalletTransaction.js";
+import { sendNotification } from "../services/notificationService.js";
 import { sendPushToUser } from "../services/pushService.js";
 import { createAdminNotification } from "../utils/adminNotification.js";
 import { sendPaymentConfirmationToCook } from "../utils/whatsappNotifications.js";
@@ -547,12 +547,6 @@ export const paymentRedirect = async (req, res) => {
 	}
 };
 
-// ============================================
-// PAYMENT CALLBACK - Creates order after payment
-// ============================================
-// ============================================
-// PAYMENT CALLBACK - Fixed notification issue
-// ============================================
 export const handlePaymentCallback = async (req, res) => {
 	try {
 		const method = req.method;
@@ -640,7 +634,7 @@ export const handlePaymentCallback = async (req, res) => {
 
 				const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
 				const deliveryFee = paymentSession.deliveryFee || 0;
-				const foodSubtotal = 0; // For customer orders, amount is set by cook
+				const foodSubtotal = 0;
 
 				const { serviceFee, paystackFee, totalAmount } = calculateOrderTotals(
 					foodSubtotal,
@@ -725,7 +719,6 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error(
 				`Amount mismatch: Expected ${expectedAmount}, Paid ${paidAmount}`,
 			);
-			// Don't fail, just log and continue
 		}
 
 		order.paymentStatus = "paid";
@@ -737,10 +730,10 @@ export const handlePaymentCallback = async (req, res) => {
 			`Order ${order._id} updated: paymentStatus=paid, status=confirmed`,
 		);
 
-		// ✅ Get cook profile for notifications
+		// Get cook profile for notifications
 		const cook = await CookProfile.findOne({ userId: order.cookId });
 
-		// Send notifications (NO EMOJIS)
+		// Send push notification to cook
 		try {
 			const cookUser = await User.findById(order.cookId);
 			if (cookUser) {
@@ -760,7 +753,7 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("Push notification error:", pushError.message);
 		}
 
-		// Send WhatsApp confirmation (NO EMOJIS)
+		// Send WhatsApp confirmation to cook
 		try {
 			if (cook) {
 				await sendPaymentConfirmationToCook(cook, order);
@@ -769,23 +762,18 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("WhatsApp notification error:", whatsappError.message);
 		}
 
-		// ✅ Create notification for customer - FIXED
+		// ✅ Use notification service for customer
 		try {
-			// Only create notification if we have a valid customer ID
 			if (order.customerId) {
-				await Notification.create({
-					userId: order.customerId,
-					title: "Order Confirmed",
-					body: `Your order has been confirmed by ${cook?.storeName || "the cook"}! We'll start preparing it soon.`,
-					type: "order_confirmed",
-					orderId: order._id,
-				});
+				await sendNotification(
+					order.customerId,
+					"Order Confirmed",
+					`Your order has been confirmed by ${cook?.storeName || "the cook"}! We'll start preparing it soon.`,
+					"order_confirmed",
+					{ orderId: order._id },
+				);
 				console.log(
 					`✅ Notification created for customer: ${order.customerId}`,
-				);
-			} else {
-				console.log(
-					`⚠️ No customerId found for order ${order._id}, skipping notification`,
 				);
 			}
 		} catch (notifError) {
@@ -793,10 +781,9 @@ export const handlePaymentCallback = async (req, res) => {
 				"Failed to create customer notification:",
 				notifError.message,
 			);
-			// Don't fail the whole process if notification fails
 		}
 
-		// Create admin notification
+		// ✅ Use notification service for admin
 		try {
 			await createAdminNotification({
 				type: "order_paid",
@@ -969,9 +956,6 @@ export const getCustomerOrderDetails = async (req, res) => {
 	}
 };
 
-// ============================================
-// CREATE CUSTOM ORDER (Cook creates order for customer) - FIXED
-// ============================================
 export const createCustomOrder = async (req, res) => {
 	try {
 		const userId = req.user._id;
@@ -1099,27 +1083,23 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// ✅ Create notification for customer - with error handling
+		// ✅ Use notification service for customer
 		try {
-			if (customer._id) {
-				await Notification.create({
-					userId: customer._id,
-					title: "New Custom Order",
-					body: `Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
-					type: "custom_order_created",
-					orderId: order._id,
-				});
-				console.log(`✅ Notification created for customer: ${customer._id}`);
-			}
+			await sendNotification(
+				customer._id,
+				"New Custom Order",
+				`Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
+				"custom_order_created",
+				{ orderId: order._id },
+			);
 		} catch (notifError) {
 			console.error(
 				"Failed to create customer notification:",
 				notifError.message,
 			);
-			// Don't fail the whole process
 		}
 
-		// ✅ Create admin notification - with error handling
+		// ✅ Use notification service for admin
 		try {
 			await createAdminNotification({
 				type: "custom_order_created",
@@ -1128,13 +1108,11 @@ export const createCustomOrder = async (req, res) => {
 				cookId: userId,
 				customerId: customer._id,
 			});
-			console.log(`✅ Admin notification created`);
 		} catch (adminError) {
 			console.error("Failed to create admin notification:", adminError.message);
-			// Don't fail the whole process
 		}
 
-		// Send WhatsApp to customer (NO EMOJIS)
+		// Send WhatsApp to customer
 		const whatsappMessage = `Hi ${customer.fullName}!
 
 Your custom order has been created by ${cook.storeName}.
@@ -1185,7 +1163,7 @@ Thank you for choosing ${cook.storeName}!`;
 };
 
 // ============================================
-// CREATE ORDER FROM CART - FIXED
+// CREATE ORDER FROM CART - FIXED with notification service
 // ============================================
 export const createOrderFromCart = async (req, res) => {
 	try {
@@ -1421,37 +1399,32 @@ export const createOrderFromCart = async (req, res) => {
 					orderId: order._id.toString(),
 				},
 			);
-			console.log(`✅ Push notification sent to cook`);
 		} catch (pushError) {
 			console.error("Failed to send push notification:", pushError.message);
 		}
 
-		// ✅ Create notification for cook - with error handling
+		// ✅ Use notification service for cook
 		try {
-			await Notification.create({
-				userId: cookId,
-				title: "New Order Received",
-				body: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-				type: "new_order",
-				orderId: order._id,
-			});
-			console.log(`✅ Notification created for cook: ${cookId}`);
+			await sendNotification(
+				cookId,
+				"New Order Received",
+				`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
+				"new_order",
+				{ orderId: order._id },
+			);
 		} catch (notifError) {
 			console.error("Failed to create cook notification:", notifError.message);
-			// Don't fail the whole process
 		}
 
-		// ✅ Create admin notification - with error handling
+		// Create admin notification
 		try {
 			await createAdminNotification({
 				type: "new_order",
 				orderId: order._id.toString(),
 				message: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
 			});
-			console.log(`✅ Admin notification created`);
 		} catch (adminError) {
 			console.error("Failed to create admin notification:", adminError.message);
-			// Don't fail the whole process
 		}
 
 		res.status(201).json({
