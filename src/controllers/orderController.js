@@ -550,6 +550,9 @@ export const paymentRedirect = async (req, res) => {
 // ============================================
 // PAYMENT CALLBACK - Creates order after payment
 // ============================================
+// ============================================
+// PAYMENT CALLBACK - Fixed notification issue
+// ============================================
 export const handlePaymentCallback = async (req, res) => {
 	try {
 		const method = req.method;
@@ -639,8 +642,6 @@ export const handlePaymentCallback = async (req, res) => {
 				const deliveryFee = paymentSession.deliveryFee || 0;
 				const foodSubtotal = 0; // For customer orders, amount is set by cook
 
-				// For customer orders, the amount should be set by cook
-				// If not set, we need to handle this case
 				const { serviceFee, paystackFee, totalAmount } = calculateOrderTotals(
 					foodSubtotal,
 					deliveryFee,
@@ -736,6 +737,9 @@ export const handlePaymentCallback = async (req, res) => {
 			`Order ${order._id} updated: paymentStatus=paid, status=confirmed`,
 		);
 
+		// ✅ Get cook profile for notifications
+		const cook = await CookProfile.findOne({ userId: order.cookId });
+
 		// Send notifications (NO EMOJIS)
 		try {
 			const cookUser = await User.findById(order.cookId);
@@ -758,12 +762,49 @@ export const handlePaymentCallback = async (req, res) => {
 
 		// Send WhatsApp confirmation (NO EMOJIS)
 		try {
-			const cook = await CookProfile.findOne({ userId: order.cookId });
 			if (cook) {
 				await sendPaymentConfirmationToCook(cook, order);
 			}
 		} catch (whatsappError) {
 			console.error("WhatsApp notification error:", whatsappError.message);
+		}
+
+		// ✅ Create notification for customer - FIXED
+		try {
+			// Only create notification if we have a valid customer ID
+			if (order.customerId) {
+				await Notification.create({
+					userId: order.customerId,
+					title: "Order Confirmed",
+					body: `Your order has been confirmed by ${cook?.storeName || "the cook"}! We'll start preparing it soon.`,
+					type: "order_confirmed",
+					orderId: order._id,
+				});
+				console.log(
+					`✅ Notification created for customer: ${order.customerId}`,
+				);
+			} else {
+				console.log(
+					`⚠️ No customerId found for order ${order._id}, skipping notification`,
+				);
+			}
+		} catch (notifError) {
+			console.error(
+				"Failed to create customer notification:",
+				notifError.message,
+			);
+			// Don't fail the whole process if notification fails
+		}
+
+		// Create admin notification
+		try {
+			await createAdminNotification({
+				type: "order_paid",
+				orderId: order._id.toString(),
+				message: `Order #${order._id.toString().slice(-6)} paid: ₦${order.totalAmount.toFixed(2)}`,
+			});
+		} catch (adminError) {
+			console.error("Failed to create admin notification:", adminError.message);
 		}
 
 		if (method === "POST") {
@@ -779,13 +820,6 @@ export const handlePaymentCallback = async (req, res) => {
 			});
 		}
 
-		await Notification.create({
-			userId: order.customerId,
-			title: "Order Confirmed",
-			body: `Your order has been confirmed by ${cook.storeName}! We'll start preparing it soon.`,
-			type: "order_confirmed",
-			orderId: order._id,
-		});
 		return res.redirect(
 			`https://getameal-web.vercel.app/order-confirmed?orderId=${order._id}&status=success&message=Payment+verified`,
 		);
@@ -936,7 +970,7 @@ export const getCustomerOrderDetails = async (req, res) => {
 };
 
 // ============================================
-// CREATE CUSTOM ORDER (Cook creates order for customer)
+// CREATE CUSTOM ORDER (Cook creates order for customer) - FIXED
 // ============================================
 export const createCustomOrder = async (req, res) => {
 	try {
@@ -1065,20 +1099,41 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal-web.vercel.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		await Notification.create({
-			userId: customer._id,
-			title: "New Custom Order",
-			body: `Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
-			type: "custom_order_created",
-			orderId: order._id,
-		});
-		await createAdminNotification({
-			type: "custom_order_created",
-			message: `New custom order created by ${cook.storeName} for ${customer.fullName}`,
-			orderId: order._id,
-			cookId: userId,
-			customerId: customer._id,
-		});
+		// ✅ Create notification for customer - with error handling
+		try {
+			if (customer._id) {
+				await Notification.create({
+					userId: customer._id,
+					title: "New Custom Order",
+					body: `Your custom order has been created by ${cook.storeName}. Please check your payment link.`,
+					type: "custom_order_created",
+					orderId: order._id,
+				});
+				console.log(`✅ Notification created for customer: ${customer._id}`);
+			}
+		} catch (notifError) {
+			console.error(
+				"Failed to create customer notification:",
+				notifError.message,
+			);
+			// Don't fail the whole process
+		}
+
+		// ✅ Create admin notification - with error handling
+		try {
+			await createAdminNotification({
+				type: "custom_order_created",
+				message: `New custom order created by ${cook.storeName} for ${customer.fullName}`,
+				orderId: order._id,
+				cookId: userId,
+				customerId: customer._id,
+			});
+			console.log(`✅ Admin notification created`);
+		} catch (adminError) {
+			console.error("Failed to create admin notification:", adminError.message);
+			// Don't fail the whole process
+		}
+
 		// Send WhatsApp to customer (NO EMOJIS)
 		const whatsappMessage = `Hi ${customer.fullName}!
 
@@ -1130,7 +1185,7 @@ Thank you for choosing ${cook.storeName}!`;
 };
 
 // ============================================
-// CREATE ORDER FROM CART
+// CREATE ORDER FROM CART - FIXED
 // ============================================
 export const createOrderFromCart = async (req, res) => {
 	try {
@@ -1355,32 +1410,50 @@ export const createOrderFromCart = async (req, res) => {
 
 		const receiptUrl = `https://getameal-web.vercel.app/receipt/${order._id}?phone=${cleanPhone}`;
 
-		// Send push notification to cook (NO EMOJIS)
-		await sendPushToUser(
-			cookId,
-			"New Order Received",
-			`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-			{
+		// Send push notification to cook
+		try {
+			await sendPushToUser(
+				cookId,
+				"New Order Received",
+				`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
+				{
+					type: "new_order",
+					orderId: order._id.toString(),
+				},
+			);
+			console.log(`✅ Push notification sent to cook`);
+		} catch (pushError) {
+			console.error("Failed to send push notification:", pushError.message);
+		}
+
+		// ✅ Create notification for cook - with error handling
+		try {
+			await Notification.create({
+				userId: cookId,
+				title: "New Order Received",
+				body: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
+				type: "new_order",
+				orderId: order._id,
+			});
+			console.log(`✅ Notification created for cook: ${cookId}`);
+		} catch (notifError) {
+			console.error("Failed to create cook notification:", notifError.message);
+			// Don't fail the whole process
+		}
+
+		// ✅ Create admin notification - with error handling
+		try {
+			await createAdminNotification({
 				type: "new_order",
 				orderId: order._id.toString(),
-			},
-		);
+				message: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
+			});
+			console.log(`✅ Admin notification created`);
+		} catch (adminError) {
+			console.error("Failed to create admin notification:", adminError.message);
+			// Don't fail the whole process
+		}
 
-		await Notification.create({
-			userId: cookId,
-			title: "New Order Received",
-			body: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-			type: "new_order",
-			orderId: order._id,
-		});
-
-		await createAdminNotification({
-			type: "new_order",
-			orderId: order._id.toString(),
-			message: `${customerName} placed a new order for ₦${totalAmount.toFixed(
-				2,
-			)}`,
-		});
 		res.status(201).json({
 			success: true,
 			message:
