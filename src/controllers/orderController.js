@@ -1480,7 +1480,7 @@ export const getOrderDetails = async (req, res) => {
 };
 
 // ============================================
-// UPDATE ORDER STATUS
+// UPDATE ORDER STATUS - FIXED WALLET CREDIT
 // ============================================
 export const updateOrderStatus = async (req, res) => {
 	try {
@@ -1567,7 +1567,6 @@ export const updateOrderStatus = async (req, res) => {
 		}
 
 		const oldStatus = order.status;
-		let cook = null;
 		let walletCredited = false;
 		let walletAmount = 0;
 
@@ -1583,10 +1582,10 @@ export const updateOrderStatus = async (req, res) => {
 				order.status === "completed") &&
 			order.paymentStatus === "paid";
 
-		// ✅ FIX: Always credit wallet when completing an order
+		// ✅ CREDIT WALLET when completing an order
 		if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
 			try {
-				// ✅ Check if already credited to prevent double crediting
+				// ✅ Check if already credited
 				const existingTransaction = await WalletTransaction.findOne({
 					reference: order._id.toString(),
 					type: "credit",
@@ -1596,15 +1595,15 @@ export const updateOrderStatus = async (req, res) => {
 					console.log(`Order ${order._id} already credited`);
 					walletCredited = true;
 					walletAmount = existingTransaction.amount || 0;
-					cook = await User.findById(order.cookId);
 
-					// ✅ Still update order status even if already credited
+					// Still update order status
 					if (oldStatus !== status) {
 						order.status = status;
 					}
 					if (sellerNote) order.sellerNote = sellerNote;
 					await order.save();
 
+					const cook = await User.findById(order.cookId);
 					const currentBalance = cook?.walletBalance || 0;
 					const updatedOrder = await Order.findById(order._id)
 						.populate("customerId", "fullName phoneNumber email")
@@ -1614,10 +1613,7 @@ export const updateOrderStatus = async (req, res) => {
 						success: true,
 						message: `Order status updated from '${oldStatus}' to '${status}'`,
 						order: updatedOrder,
-						transition: {
-							from: oldStatus,
-							to: status,
-						},
+						transition: { from: oldStatus, to: status },
 						wallet: {
 							credited: true,
 							amount: walletAmount,
@@ -1631,107 +1627,74 @@ export const updateOrderStatus = async (req, res) => {
 				const feesAddedToCustomer = order.feesAddedToCustomer !== false;
 				let cookAmount = 0;
 				let platformFee = 0;
-				let paystackFeeDeducted = 0;
-
-				console.log("💰 Calculating cook earnings:", {
-					totalAmount: order.totalAmount,
-					subtotal: order.subtotal,
-					deliveryFee: order.deliveryFee,
-					serviceFee: order.serviceFee,
-					paystackFee: order.paystackFee,
-					feesAddedToCustomer: feesAddedToCustomer,
-				});
 
 				if (feesAddedToCustomer) {
-					// ✅ Fees added to customer - cook gets total minus platform fee
 					const platformFeeRate = 0.05;
 					platformFee = order.totalAmount * platformFeeRate;
 					cookAmount =
 						Math.round((order.totalAmount - platformFee) * 100) / 100;
-					paystackFeeDeducted = 0;
 				} else {
-					// ✅ Cook absorbs fees - cook gets total minus all fees
 					const platformFeeRate = 0.05;
 					platformFee = order.subtotal * platformFeeRate;
 					const paystackFee = order.paystackFee || 0;
 					cookAmount =
 						Math.round((order.totalAmount - platformFee - paystackFee) * 100) /
 						100;
-					paystackFeeDeducted = paystackFee;
 				}
 
-				// ✅ Ensure cookAmount is not negative
-				if (cookAmount < 0) {
-					console.warn(`⚠️ Negative cook amount (${cookAmount}), setting to 0`);
-					cookAmount = 0;
-				}
+				if (cookAmount < 0) cookAmount = 0;
 
-				console.log(`💰 Cook earnings calculation:`, {
-					cookAmount: cookAmount,
-					platformFee: platformFee,
-					paystackFeeDeducted: paystackFeeDeducted,
-					totalAmount: order.totalAmount,
-				});
-
-				// ✅ Find cook user
-				cook = await User.findById(order.cookId);
-				if (!cook) {
-					console.error(`Cook not found for order ${order._id}`);
-					return res.status(404).json({ message: "Cook not found" });
-				}
-
-				// ✅ Credit cook's wallet
-				const previousBalance = cook.walletBalance || 0;
-				cook.walletBalance =
-					Math.round((previousBalance + cookAmount) * 100) / 100;
-				await cook.save();
-
-				console.log(`💰 Cook ${cook._id} wallet credited:`, {
-					previousBalance: previousBalance,
-					amount: cookAmount,
-					newBalance: cook.walletBalance,
-				});
-
-				// ✅ Also update CookProfile wallet
-				const cookProfile = await CookProfile.findOne({
-					userId: order.cookId,
-				});
-				if (cookProfile) {
-					cookProfile.walletBalance =
-						Math.round((cookProfile.walletBalance || 0 + cookAmount) * 100) /
-						100;
-					await cookProfile.save();
-				}
-
-				// ✅ Increment ordersCount in CookProfile
-				await CookProfile.findOneAndUpdate(
-					{ userId: order.cookId },
-					{ $inc: { ordersCount: 1 } },
+				console.log(
+					`💰 Crediting wallet: ₦${cookAmount.toFixed(2)} for order ${order._id}`,
 				);
 
-				// ✅ Create wallet transaction
-				try {
-					await WalletTransaction.create({
-						cookId: cook._id,
-						type: "credit",
-						amount: cookAmount,
-						reference: order._id.toString(),
-						description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
-						status: "success",
-						orderId: order._id,
-					});
-					console.log(`✅ Wallet transaction created for order ${order._id}`);
-				} catch (txError) {
-					console.error("Failed to create WalletTransaction:", txError.message);
-					// ✅ Don't fail the whole operation if transaction creation fails
+				// ✅ UPDATE COOK PROFILE WALLET - Using findOneAndUpdate for reliability
+				const updatedCookProfile = await CookProfile.findOneAndUpdate(
+					{ userId: order.cookId },
+					{
+						$inc: {
+							walletBalance: cookAmount,
+							ordersCount: 1,
+						},
+					},
+					{
+						new: true,
+						upsert: false,
+					},
+				);
+
+				if (updatedCookProfile) {
+					console.log(
+						`✅ Cook wallet updated: ₦${updatedCookProfile.walletBalance}`,
+					);
+					walletCredited = true;
+					walletAmount = cookAmount;
+				} else {
+					console.error(`❌ Failed to update wallet for cook ${order.cookId}`);
 				}
 
-				walletCredited = true;
-				walletAmount = cookAmount;
+				// ✅ Create wallet transaction
+				if (walletCredited) {
+					try {
+						await WalletTransaction.create({
+							cookId: order.cookId,
+							type: "credit",
+							amount: cookAmount,
+							reference: order._id.toString(),
+							description: `Order #${order._id.toString().slice(-6)} payment ${!feesAddedToCustomer ? "(cook absorbed fees)" : ""}`,
+							status: "success",
+							orderId: order._id,
+						});
+						console.log(`✅ Wallet transaction created for order ${order._id}`);
+					} catch (txError) {
+						console.error(
+							"Failed to create WalletTransaction:",
+							txError.message,
+						);
+					}
+				}
 			} catch (error) {
 				console.error("Error crediting wallet:", error);
-				// ✅ Don't fail the status update if wallet credit fails
-				// Just log the error and continue
 			}
 		}
 
@@ -1743,9 +1706,7 @@ export const updateOrderStatus = async (req, res) => {
 		await order.save();
 
 		// ✅ Get updated cook balance
-		if (!cook) {
-			cook = await User.findById(order.cookId);
-		}
+		const cook = await User.findById(order.cookId);
 		const currentBalance = cook?.walletBalance || 0;
 
 		const updatedOrder = await Order.findById(order._id)

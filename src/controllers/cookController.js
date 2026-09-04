@@ -222,10 +222,13 @@ export const getCookProfile = async (req, res) => {
 	try {
 		const userId = req.user._id;
 
-		const cook = await CookProfile.findOne({ userId }).populate(
-			"userId",
-			"fullName email phone profileImage coverImage isSuspended",
-		);
+		// ✅ Force fresh data by finding and populating
+		const cook = await CookProfile.findOne({ userId })
+			.populate(
+				"userId",
+				"fullName email phone profileImage coverImage isSuspended",
+			)
+			.lean(); // ✅ Use lean() for better performance
 
 		if (!cook) {
 			return res.status(404).json({
@@ -261,11 +264,16 @@ export const getCookProfile = async (req, res) => {
 				? reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
 				: 0;
 
+		// ✅ Log the wallet balance for debugging
+		console.log(
+			`💰 Cook ${cook.storeName} wallet balance: ₦${cook.walletBalance || 0}`,
+		);
+
 		const responseData = {
 			success: true,
 			cookProfile: {
 				id: cook._id,
-				userId: cook.userId?._id,
+				userId: cook.userId?._id || cook.userId,
 				storeName: cook.storeName,
 				storeHandle: cook.storeHandle,
 				storeLink: cook.storeLink,
@@ -285,11 +293,11 @@ export const getCookProfile = async (req, res) => {
 				isAvailable: cook.isAvailable,
 				isSuspended: cook.isSuspended || false,
 
-				// ✅ Use REAL values from database
 				rating: Math.round(avgRating * 10) / 10,
 				reviewsCount: totalReviews,
-				ordersCount: orderCount, // ✅ Update this to use real count
+				ordersCount: orderCount,
 
+				// ✅ Use the latest wallet balance from the database
 				walletBalance: cook.walletBalance || 0,
 				viewsThisWeek: cook.viewsThisWeek || 0,
 				bankDetails: cook.bankDetails,
@@ -302,7 +310,7 @@ export const getCookProfile = async (req, res) => {
 					products: productCount,
 					activeProducts: activeProductCount,
 					customers: customerCount,
-					orders: orderCount, // ✅ This was already correct
+					orders: orderCount,
 				},
 			},
 			user: {
