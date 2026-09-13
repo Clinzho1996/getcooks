@@ -250,17 +250,25 @@ Thank you for choosing ${cook.storeName}!`;
 					sessionId: paymentSession._id.toString(),
 					customerName: customerName,
 					foodRequest: foodRequest,
-					type: "food_request"
-				}
+					type: "food_request",
+				},
 			};
 
-			console.log("📝 Notification data:", JSON.stringify(notificationData, null, 2));
+			console.log(
+				"📝 Notification data:",
+				JSON.stringify(notificationData, null, 2),
+			);
 
 			const notification = await Notification.create(notificationData);
-			console.log(`✅ In-app notification created for cook: ${cookId}`, notification._id);
-
+			console.log(
+				`✅ In-app notification created for cook: ${cookId}`,
+				notification._id,
+			);
 		} catch (notifError) {
-			console.error("❌ Failed to create cook notification:", notifError.message);
+			console.error(
+				"❌ Failed to create cook notification:",
+				notifError.message,
+			);
 			console.error("❌ Error stack:", notifError.stack);
 			if (notifError.errors) {
 				console.error("❌ Validation errors:", notifError.errors);
