@@ -23,7 +23,6 @@ import payoutRoutes from "./routes/payoutRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import webhookRoutes from "./routes/webhooks.js";
-import whatsappRoutes from "./routes/whatsappRoutes.js";
 
 connectDB();
 
@@ -49,7 +48,6 @@ app.use("/api/webhooks", webhookRoutes);
 app.use("/api/payouts", payoutRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/customers", customerRoutes);
-app.use("/whatsapp", whatsappRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/notifications", notificationRoutes);
 
