@@ -1463,40 +1463,6 @@ export const createOrderFromCart = async (req, res) => {
 
 		const receiptUrl = `https://getameal.app/receipt/${order._id}?phone=${cleanPhone}`;
 
-		// Send push notification to cook
-		try {
-			await sendPushToUser(
-				cookId,
-				"New Order Received",
-				`${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-				{
-					type: "new_order",
-					orderId: order._id.toString(),
-				},
-			);
-		} catch (pushError) {
-			console.error("Failed to send push notification:", pushError.message);
-		}
-
-		// ✅ Create in-app notification for the COOK using Notification.create
-		try {
-			await Notification.create({
-				userId: cookId, // Cook's user ID
-				title: "New Order Received",
-				body: `${customerName} placed a new order for ₦${totalAmount.toFixed(2)}`,
-				type: "order",
-				data: {
-					orderId: order._id,
-					customerName: customerName,
-					amount: totalAmount,
-					type: "product_order",
-				},
-			});
-			console.log(`✅ In-app notification created for cook: ${cookId}`);
-		} catch (notifError) {
-			console.error("Failed to create cook notification:", notifError.message);
-		}
-
 		// Create admin notification
 		try {
 			await createAdminNotification({
