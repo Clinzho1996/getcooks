@@ -13,7 +13,7 @@ import WalletTransaction from "../models/WalletTransaction.js";
 import { sendNotification } from "../services/notificationService.js";
 import { sendPushToUser } from "../services/pushService.js";
 import { createAdminNotification } from "../utils/adminNotification.js";
-import { sendPaymentConfirmationToCook } from "../utils/whatsappNotifications.js";
+import { getResendInstance } from "../utils/emailService.js";
 
 // ============================================
 // HELPER: Format phone number
@@ -22,6 +22,45 @@ const formatPhone = (phone) => {
 	const cleaned = phone.replace(/\D/g, "");
 	if (cleaned.length === 10) return `0${cleaned}`;
 	return cleaned;
+};
+
+// ============================================
+// HELPER: Send transactional email
+// ============================================
+const sendEmail = async ({ to, subject, heading, message }) => {
+	try {
+		const resend = getResendInstance();
+		const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #ff6b35; margin: 0;">🍽️ Getameal</h1>
+        </div>
+        <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h2 style="margin: 0 0 10px 0; color: #333;">${heading}</h2>
+        </div>
+        <div style="color: #333; font-size: 15px; line-height: 1.6; white-space: pre-line;">
+          ${message}
+        </div>
+        <hr style="margin: 24px 0; border: none; border-top: 1px solid #e0e0e0;" />
+        <p style="color: #999; font-size: 12px; text-align: center; margin: 0;">
+          Thank you for choosing Getameal!
+        </p>
+      </div>
+    `;
+
+		await resend.emails.send({
+			from: process.env.EMAIL_FROM,
+			to,
+			subject,
+			html,
+		});
+
+		console.log(`✅ Email sent to ${to}: ${subject}`);
+		return true;
+	} catch (error) {
+		console.error(`❌ Failed to send email to ${to}:`, error.message);
+		return false;
+	}
 };
 
 // ============================================
@@ -68,7 +107,6 @@ export const createCustomerOrder = async (req, res) => {
 			foodRequest,
 		} = req.body;
 
-		// Validate required fields
 		if (
 			!cookId ||
 			!customerName ||
@@ -83,7 +121,6 @@ export const createCustomerOrder = async (req, res) => {
 			});
 		}
 
-		// Validate phone number (11 digits)
 		const phoneRegex = /^[0-9]{11}$/;
 		const cleanPhone = formatPhone(customerPhone);
 		if (!phoneRegex.test(cleanPhone)) {
@@ -92,7 +129,6 @@ export const createCustomerOrder = async (req, res) => {
 			});
 		}
 
-		// Check if cook exists and is available
 		const cook = await CookProfile.findOne({ userId: cookId });
 		if (!cook) {
 			return res.status(404).json({ message: "Cook not found" });
@@ -104,7 +140,6 @@ export const createCustomerOrder = async (req, res) => {
 			return res.status(400).json({ message: "Store is pending approval" });
 		}
 
-		// Validate ready date
 		const readyDateTime = new Date(readyDate);
 		if (readyDateTime < new Date()) {
 			return res
@@ -112,14 +147,12 @@ export const createCustomerOrder = async (req, res) => {
 				.json({ message: "Ready date must be in the future" });
 		}
 
-		// Validate delivery address if delivery type is delivery
 		if (deliveryType === "delivery" && !deliveryAddress) {
 			return res.status(400).json({
 				message: "Delivery address is required for delivery orders",
 			});
 		}
 
-		// Check if customer exists
 		let customer = await Customer.findOne({
 			cookId,
 			phoneNumber: cleanPhone,
@@ -134,10 +167,8 @@ export const createCustomerOrder = async (req, res) => {
 			});
 		}
 
-		// Calculate delivery fee
 		const deliveryFee = deliveryType === "delivery" ? cook.deliveryFee || 0 : 0;
 
-		// Create payment session (NOT an order yet)
 		const paymentReference =
 			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
 
@@ -164,11 +195,10 @@ export const createCustomerOrder = async (req, res) => {
 
 		const paymentSession = await PaymentSession.create(paymentSessionData);
 
-		// Generate Paystack payment link (placeholder amount)
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
-				email: customer.email || `${cleanPhone}@getameal.com`,
+				email: customer.email || `${cleanPhone}@getameal.app`,
 				amount: 10000,
 				reference: paymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
@@ -190,12 +220,13 @@ export const createCustomerOrder = async (req, res) => {
 		paymentSession.paymentLink = paystackResponse.data.data.authorization_url;
 		await paymentSession.save();
 
-		// Format payment link with phone
 		const encodedPaystackLink = encodeURIComponent(paymentSession.paymentLink);
 		const formattedPaymentLink = `https://getameal.app/pay/${paymentSession._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// Send WhatsApp to customer
-		const whatsappMessage = `Hi ${customerName}!
+		// ✅ EMAIL to customer
+		if (customer.email || cleanPhone) {
+			const emailTo = customer.email || `${cleanPhone}@getameal.app`;
+			const emailMessage = `Hi ${customerName}!
 
 Your food request has been received by ${cook.storeName}.
 
@@ -209,9 +240,14 @@ Please wait for the cook to confirm and set the price. You will receive a paymen
 
 Thank you for choosing ${cook.storeName}!`;
 
-		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+			await sendEmail({
+				to: emailTo,
+				subject: `Food request received by ${cook.storeName}`,
+				heading: "Food request received",
+				message: emailMessage,
+			});
+		}
 
-		// Send push notification to cook
 		try {
 			await sendPushToUser(
 				cookId,
@@ -228,14 +264,11 @@ Thank you for choosing ${cook.storeName}!`;
 			console.error("Failed to send push notification:", pushError.message);
 		}
 
-		// ✅ Create in-app notification for the COOK - with detailed logging
 		try {
-			// Log what we're trying to create
 			console.log(`📝 Creating in-app notification for cook: ${cookId}`);
 			console.log(`📝 Customer: ${customerName}`);
 			console.log(`📝 Food Request: ${foodRequest}`);
 
-			// Verify Notification model is available
 			if (!Notification) {
 				console.error("❌ Notification model is not imported or undefined!");
 				throw new Error("Notification model not available");
@@ -273,7 +306,6 @@ Thank you for choosing ${cook.storeName}!`;
 			if (notifError.errors) {
 				console.error("❌ Validation errors:", notifError.errors);
 			}
-			// Don't fail the whole process
 		}
 
 		res.status(201).json({
@@ -340,11 +372,9 @@ export const acceptOrderRequest = async (req, res) => {
 			addFeesToCustomer,
 		);
 
-		// ✅ Generate a NEW payment reference for this order
 		const newPaymentReference =
 			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
 
-		// Create the actual order NOW (after price is set)
 		const order = await Order.create({
 			cookId: userId,
 			customerId: paymentSession.customerId._id,
@@ -369,25 +399,22 @@ export const acceptOrderRequest = async (req, res) => {
 			feesAddedToCustomer: addFeesToCustomer,
 			pickupWindow: paymentSession.pickupWindow,
 			sessionId: paymentSession.sessionId || null,
-			paymentReference: newPaymentReference, // ✅ Use NEW reference
+			paymentReference: newPaymentReference,
 		});
 
-		// Update payment session with the new reference
 		paymentSession.status = "completed";
 		paymentSession.orderId = order._id;
 		paymentSession.paymentReference = newPaymentReference;
 		await paymentSession.save();
 
-		// Update customer stats
 		await Customer.findByIdAndUpdate(paymentSession.customerId._id, {
 			$inc: { ordersCount: 1, totalSpent: totalAmount },
 			$set: { lastOrderDate: new Date() },
 		});
 
-		// ✅ Initialize Paystack payment with NEW reference
 		const customerEmail =
 			paymentSession.customerEmail ||
-			`customer_${paymentSession.customerPhone}@getameal.com`;
+			`customer_${paymentSession.customerPhone}@getameal.app`;
 
 		const amountInKobo = Math.round(totalAmount * 100);
 
@@ -456,8 +483,12 @@ export const acceptOrderRequest = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${order.customerPhone}`;
 
-		// Send WhatsApp to customer
-		const whatsappMessage = `Hi ${paymentSession.customerName}!
+		// ✅ EMAIL to customer
+		const customerEmailTo =
+			paymentSession.customerEmail ||
+			`customer_${paymentSession.customerPhone}@getameal.app`;
+
+		const customerMessage = `Hi ${paymentSession.customerName}!
 
 Your order has been accepted by ${cook.storeName}.
 
@@ -474,11 +505,16 @@ View your receipt: ${receiptUrl}
 
 Thank you for choosing ${cook.storeName}!`;
 
-		const whatsappUrl = `https://wa.me/${paymentSession.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+		await sendEmail({
+			to: customerEmailTo,
+			subject: `Your order from ${cook.storeName} is ready to pay`,
+			heading: "Order accepted — complete your payment",
+			message: customerMessage,
+		});
 
 		try {
 			await sendNotification(
-				userId, // Cook's user ID
+				userId,
 				"Order Accepted",
 				`You accepted a custom order from ${paymentSession.customerName}: ${paymentSession.foodRequest} (₦${totalAmount.toFixed(2)})`,
 				"order",
@@ -495,7 +531,6 @@ Thank you for choosing ${cook.storeName}!`;
 			console.error("Failed to create cook notification:", notifError.message);
 		}
 
-		// Send push notification to cook
 		await sendPushToUser(
 			userId,
 			"Order Accepted",
@@ -522,7 +557,6 @@ Thank you for choosing ${cook.storeName}!`;
 				paymentLink: formattedPaymentLink,
 				receiptUrl: receiptUrl,
 				status: order.status,
-				whatsappUrl: whatsappUrl,
 			},
 		});
 	} catch (error) {
@@ -579,9 +613,14 @@ export const declineOrderRequest = async (req, res) => {
 			reason || "Unable to fulfill your order at this time";
 		await paymentSession.save();
 
-		// Send WhatsApp message to customer (NO EMOJIS)
 		const declineReason = reason || "Unable to fulfill your order at this time";
-		const whatsappMessage = `Hi ${paymentSession.customerName}!
+
+		// ✅ EMAIL to customer
+		const customerEmailTo =
+			paymentSession.customerEmail ||
+			`customer_${paymentSession.customerPhone}@getameal.app`;
+
+		const emailMessage = `Hi ${paymentSession.customerName}!
 
 Your food request has been declined by ${cook.storeName}.
 
@@ -591,13 +630,17 @@ We apologise for any inconvenience. Please feel free to try another cook.
 
 Thank you for choosing GetAMeal!`;
 
-		const whatsappUrl = `https://wa.me/${paymentSession.customerPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+		await sendEmail({
+			to: customerEmailTo,
+			subject: `Your food request was declined by ${cook.storeName}`,
+			heading: "Food request declined",
+			message: emailMessage,
+		});
 
 		res.json({
 			success: true,
 			message: "Food request declined",
 			session: paymentSession,
-			whatsappUrl: whatsappUrl,
 		});
 	} catch (error) {
 		console.error("Decline order request error:", error);
@@ -797,7 +840,6 @@ export const handlePaymentCallback = async (req, res) => {
 
 		const cook = await CookProfile.findOne({ userId: order.cookId });
 
-		// ✅ Send push notification to cook (may fail, but that's okay)
 		try {
 			const cookUser = await User.findById(order.cookId);
 			if (cookUser) {
@@ -817,7 +859,6 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("Push notification error:", pushError.message);
 		}
 
-		// ✅ Create IN-APP notification for the cook (this is the one that shows in the app)
 		try {
 			const notification = await Notification.create({
 				userId: order.cookId,
@@ -844,13 +885,57 @@ export const handlePaymentCallback = async (req, res) => {
 			console.error("Error details:", notifError.errors);
 		}
 
-		// Send WhatsApp confirmation to cook
+		// ✅ EMAIL confirmation to cook
 		try {
 			if (cook) {
-				await sendPaymentConfirmationToCook(cook, order);
+				const cookEmailTo = cook.email || cook.userId?.email;
+				if (cookEmailTo) {
+					const cookMessage = `New paid order received!
+
+Customer: ${order.customerName}
+Order: ${order.customOrderTitle || "Custom Order"}
+Amount: ₦${order.totalAmount.toFixed(2)}
+
+Start preparing the order now.`;
+
+					await sendEmail({
+						to: cookEmailTo,
+						subject: `New paid order — ₦${order.totalAmount.toFixed(2)}`,
+						heading: "New paid order",
+						message: cookMessage,
+					});
+				}
 			}
-		} catch (whatsappError) {
-			console.error("WhatsApp notification error:", whatsappError.message);
+		} catch (emailError) {
+			console.error("Email notification error:", emailError.message);
+		}
+
+		// ✅ EMAIL confirmation to customer
+		try {
+			const customerEmailTo =
+				order.customerEmail || `customer_${order.customerPhone}@getameal.app`;
+
+			const receiptUrl = `https://getameal.app/receipt/${order._id}?phone=${order.customerPhone}`;
+
+			const customerMessage = `Hi ${order.customerName}!
+
+Your payment of ₦${order.totalAmount.toFixed(2)} has been received.
+
+Order: ${order.customOrderTitle || "Custom Order"}
+Ready: ${new Date(order.readyDate).toLocaleDateString()}
+
+View your receipt: ${receiptUrl}
+
+Thank you for choosing GetAMeal!`;
+
+			await sendEmail({
+				to: customerEmailTo,
+				subject: `Payment received — ₦${order.totalAmount.toFixed(2)}`,
+				heading: "Payment received",
+				message: customerMessage,
+			});
+		} catch (emailError) {
+			console.error("Customer email error:", emailError.message);
 		}
 
 		if (method === "POST") {
@@ -1050,7 +1135,6 @@ export const createCustomOrder = async (req, res) => {
 
 		const addFeesToCustomer = cook.fees?.addFeesToCustomer !== false;
 
-		// Find or create customer
 		let customer = null;
 		const cleanPhone = formatPhone(customerPhone);
 
@@ -1109,17 +1193,15 @@ export const createCustomOrder = async (req, res) => {
 			customerNote: customerNote || "",
 		});
 
-		// Update customer stats
 		await Customer.findByIdAndUpdate(customer._id, {
 			$inc: { ordersCount: 1, totalSpent: totalAmount },
 			$set: { lastOrderDate: new Date() },
 		});
 
-		// Initialize Paystack payment
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
-				email: customer.email || `${cleanPhone}@getameal.com`,
+				email: customer.email || `${cleanPhone}@getameal.app`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
@@ -1145,8 +1227,11 @@ export const createCustomOrder = async (req, res) => {
 		const encodedPaystackLink = encodeURIComponent(order.paymentLink);
 		const formattedPaymentLink = `https://getameal.app/pay/${order._id}?kitchen=${cook.storeHandle}&link=${encodedPaystackLink}&phone=${cleanPhone}`;
 
-		// Send WhatsApp to customer
-		const whatsappMessage = `Hi ${customer.fullName}!
+		// ✅ EMAIL to customer
+		const customerEmailTo =
+			customer.email || `customer_${cleanPhone}@getameal.app`;
+
+		const customerMessage = `Hi ${customer.fullName}!
 
 Your custom order has been created by ${cook.storeName}.
 
@@ -1164,11 +1249,14 @@ View your receipt: ${receiptUrl}
 
 Thank you for choosing ${cook.storeName}!`;
 
-		const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+		await sendEmail({
+			to: customerEmailTo,
+			subject: `Your custom order from ${cook.storeName} is ready to pay`,
+			heading: "Custom order created",
+			message: customerMessage,
+		});
 
-		// ✅ Create in-app notification for the COOK - FIXED
 		try {
-			// Log what we're trying to create
 			console.log(`📝 Creating notification for cook: ${userId}`);
 			console.log(`Title: Custom Order Created`);
 			console.log(
@@ -1179,7 +1267,7 @@ Thank you for choosing ${cook.storeName}!`;
 				userId: userId,
 				title: "Custom Order Created",
 				body: `You created a custom order for ${customer.fullName}: "${title}" (₦${totalAmount.toFixed(2)})`,
-				type: "general", // ✅ Using "general" which is definitely valid
+				type: "general",
 				data: {
 					orderId: order._id.toString(),
 					customerName: customer.fullName,
@@ -1205,7 +1293,6 @@ Thank you for choosing ${cook.storeName}!`;
 				notifError.message,
 			);
 			console.error("❌ Error details:", notifError.errors);
-			// Don't fail the whole process
 		}
 
 		res.status(201).json({
@@ -1228,7 +1315,6 @@ Thank you for choosing ${cook.storeName}!`;
 				receiptUrl: receiptUrl,
 				readyDate: order.readyDate,
 				deliveryType: order.deliveryType,
-				whatsappUrl: whatsappUrl,
 			},
 		});
 	} catch (error) {
@@ -1326,7 +1412,6 @@ export const createOrderFromCart = async (req, res) => {
 			});
 		}
 
-		// Build order items from cart
 		const orderItems = [];
 		let foodSubtotal = 0;
 
@@ -1398,7 +1483,6 @@ export const createOrderFromCart = async (req, res) => {
 		const paymentReference =
 			"PAY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
 
-		// Create the order
 		const order = await Order.create({
 			cookId,
 			customerId: customer._id,
@@ -1435,11 +1519,10 @@ export const createOrderFromCart = async (req, res) => {
 
 		await Cart.findOneAndDelete({ sessionId });
 
-		// Initialize Paystack payment
 		const paystackResponse = await axios.post(
 			"https://api.paystack.co/transaction/initialize",
 			{
-				email: customerEmail || `${cleanPhone}@getameal.com`,
+				email: customerEmail || `${cleanPhone}@getameal.app`,
 				amount: Math.round(totalAmount * 100),
 				reference: paymentReference,
 				callback_url: `${process.env.API_URL}/payment/callback`,
@@ -1463,7 +1546,6 @@ export const createOrderFromCart = async (req, res) => {
 
 		const receiptUrl = `https://getameal.app/receipt/${order._id}?phone=${cleanPhone}`;
 
-		// Create admin notification
 		try {
 			await createAdminNotification({
 				type: "new_order",
@@ -1611,7 +1693,7 @@ export const getOrderDetails = async (req, res) => {
 };
 
 // ============================================
-// UPDATE ORDER STATUS - FIXED WALLET CREDIT
+// UPDATE ORDER STATUS - EMAIL NOTIFICATIONS
 // ============================================
 export const updateOrderStatus = async (req, res) => {
 	try {
@@ -1713,10 +1795,8 @@ export const updateOrderStatus = async (req, res) => {
 				order.status === "completed") &&
 			order.paymentStatus === "paid";
 
-		// ✅ CREDIT WALLET when completing an order
 		if (isCompletingOrder || (isAlreadyCompleted && !isSameStatus)) {
 			try {
-				// ✅ Check if already credited
 				const existingTransaction = await WalletTransaction.findOne({
 					reference: order._id.toString(),
 					type: "credit",
@@ -1727,7 +1807,6 @@ export const updateOrderStatus = async (req, res) => {
 					walletCredited = true;
 					walletAmount = existingTransaction.amount || 0;
 
-					// Still update order status
 					if (oldStatus !== status) {
 						order.status = status;
 					}
@@ -1754,7 +1833,6 @@ export const updateOrderStatus = async (req, res) => {
 					});
 				}
 
-				// ✅ Calculate cook's earnings
 				const feesAddedToCustomer = order.feesAddedToCustomer !== false;
 				let cookAmount = 0;
 				let platformFee = 0;
@@ -1779,7 +1857,6 @@ export const updateOrderStatus = async (req, res) => {
 					`💰 Crediting wallet: ₦${cookAmount.toFixed(2)} for order ${order._id}`,
 				);
 
-				// ✅ UPDATE COOK PROFILE WALLET - Using findOneAndUpdate for reliability
 				const updatedCookProfile = await CookProfile.findOneAndUpdate(
 					{ userId: order.cookId },
 					{
@@ -1804,7 +1881,6 @@ export const updateOrderStatus = async (req, res) => {
 					console.error(`❌ Failed to update wallet for cook ${order.cookId}`);
 				}
 
-				// ✅ Create wallet transaction
 				if (walletCredited) {
 					try {
 						await WalletTransaction.create({
@@ -1829,20 +1905,83 @@ export const updateOrderStatus = async (req, res) => {
 			}
 		}
 
-		// ✅ Update order status
 		if (oldStatus !== status) {
 			order.status = status;
 		}
 		if (sellerNote) order.sellerNote = sellerNote;
 		await order.save();
 
-		// ✅ Get updated cook balance
 		const cook = await User.findById(order.cookId);
 		const currentBalance = cook?.walletBalance || 0;
 
 		const updatedOrder = await Order.findById(order._id)
 			.populate("customerId", "fullName phoneNumber email")
 			.populate("items.productId", "name images");
+
+		// ✅ EMAIL status update to customer
+		try {
+			const customerEmailTo =
+				order.customerEmail || `customer_${order.customerPhone}@getameal.app`;
+
+			const statusMessages = {
+				confirmed: `Your order has been confirmed by ${order.cookName || "the cook"}.`,
+				delivered: "Your order has been delivered! Enjoy your meal.",
+				picked_up: "Your order has been picked up! Enjoy your meal.",
+				completed: "Your order has been completed.",
+				cancelled: "Your order has been cancelled.",
+			};
+
+			const statusMessage =
+				statusMessages[status] || `Your order status is now: ${status}`;
+
+			const receiptUrl = `https://getameal.app/receipt/${order._id}?phone=${order.customerPhone}`;
+
+			const customerEmailBody = `Hi ${order.customerName}!
+
+${statusMessage}
+
+Order: ${order.customOrderTitle || "Custom order"}
+Status: ${status}
+${sellerNote ? `Note from cook: ${sellerNote}` : ""}
+
+View your receipt: ${receiptUrl}
+
+Thank you for choosing GetAMeal!`;
+
+			await sendEmail({
+				to: customerEmailTo,
+				subject: `Order ${status} — GetAMeal`,
+				heading: `Order ${status}`,
+				message: customerEmailBody,
+			});
+		} catch (emailError) {
+			console.error("Customer email error:", emailError.message);
+		}
+
+		// ✅ EMAIL wallet credit to cook
+		if (walletCredited) {
+			try {
+				const cookProfileForEmail = await CookProfile.findOne({
+					userId: order.cookId,
+				});
+				const cookEmailTo = cookProfileForEmail?.email || cook?.email;
+
+				if (cookEmailTo) {
+					const cookMessage = `You earned ₦${walletAmount.toFixed(2)} from order #${order._id.toString().slice(-6)}.
+
+New balance: ₦${currentBalance.toFixed(2)}`;
+
+					await sendEmail({
+						to: cookEmailTo,
+						subject: `Payment received — ₦${walletAmount.toFixed(2)}`,
+						heading: "Payment received",
+						message: cookMessage,
+					});
+				}
+			} catch (emailError) {
+				console.error("Cook email error:", emailError.message);
+			}
+		}
 
 		res.json({
 			success: true,

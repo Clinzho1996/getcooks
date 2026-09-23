@@ -1012,7 +1012,7 @@ export const loginInit = async (req, res) => {
 				error: "ACCOUNT_SUSPENDED",
 				details: {
 					reason: suspensionNote?.note || "Violation of terms",
-					supportEmail: process.env.SUPPORT_EMAIL || "support@getameal.com",
+					supportEmail: process.env.SUPPORT_EMAIL || "support@getameal.app",
 				},
 			});
 		}
@@ -1120,7 +1120,7 @@ export const loginVerify = async (req, res) => {
 				details: {
 					reason: suspensionNote?.note || "Violation of terms of service",
 					suspendedAt: user.updatedAt,
-					supportEmail: process.env.SUPPORT_EMAIL || "support@getameal.com",
+					supportEmail: process.env.SUPPORT_EMAIL || "support@getameal.app",
 				},
 			});
 		}
@@ -1149,7 +1149,7 @@ export const loginVerify = async (req, res) => {
 				error: "COOK_ACCOUNT_SUSPENDED",
 				details: {
 					reason: cookProfile.suspensionReason,
-					supportEmail: process.env.SUPPORT_EMAIL || "support@getameal.com",
+					supportEmail: process.env.SUPPORT_EMAIL || "support@getameal.app",
 				},
 			});
 		}
