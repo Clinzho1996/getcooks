@@ -19,7 +19,7 @@ router.use(protect);
 
 // User routes
 router.get("/", getNotifications);
-router.patch("/all-read", markAllAsRead);
+router.patch("/read-all", markAllAsRead);
 router.post("/push-token", registerPushToken);
 router.delete("/push-token", unregisterPushToken);
 router.get("/settings", getNotificationSettings);
